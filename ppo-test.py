@@ -127,7 +127,7 @@ if not demo:
         config = tf.ConfigProto(
             inter_op_parallelism_threads=1,
             intra_op_parallelism_threads=1)
-        config.gpu_options.per_process_gpu_memory_fraction = 0.1
+        config.gpu_options.per_process_gpu_memory_fraction = 0.07
         sess = tf.InteractiveSession(config=config)
 
         class Dummy:
@@ -195,7 +195,6 @@ else: # demo
             r = 0
             sn, rplus, done, info = env.step(a)
             r += rplus
-            if done: break
             if ts > env.spec.timestep_limit:
                 done = True
             uscore += r
