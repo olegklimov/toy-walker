@@ -30,14 +30,12 @@ html2 = """
           2: {targetAxisIndex: 1},
           3: {targetAxisIndex: 1},
         },
-//        vAxes: {
-//          // Adds titles to each axis.
-//          0: {title: 'Temps (Celsius)'},
-//          1: {title: 'Daylight'}
-//        },        //'width'  : '100%',
-        //'height' : '100%'
-        //hAxis: { title: 'Time' },
-        //vAxis: { title: 'Popularity' }
+        hAxis: {
+            viewWindow: {
+                min: 0,
+                max: 2000000
+            }
+        }
       };
       var chart = new google.visualization.LineChart(document.getElementById('chart_div'));
       chart.draw(data, options);

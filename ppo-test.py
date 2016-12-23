@@ -11,19 +11,20 @@ from rl_algs import pposgd
 from rl_algs.pposgd.mlp_policy import MlpPolicy
 
 from mpi4py import MPI
-num_cpu = 4
+num_cpu = 8
 
 import gym
 experiment = sys.argv[1]
 print("experiment_name: '%s'" % experiment)
 env_id = "LunarLanderContinuous-v2"
+#env_id = "BipedalWalker-v2"
 max_timesteps = 2000000
 seed = 1339
 
 demo = len(sys.argv)>2 and sys.argv[2]=="demo"
 
 policy_kwargs = dict(
-    hid_size=16,
+    hid_size=120,
     num_hid_layers=2
     )
 
@@ -47,16 +48,16 @@ def policy_fn(name, ob_space, ac_space):
 
             ob = U.get_placeholder(name="ob", dtype=tf.float32, shape=[sequence_length] + list(ob_space.shape))
 
+            # value est
             with tf.variable_scope("retfilter"):
                 self.ret_rms = RunningMeanStd()
-
             last_out = ob
             for i in range(num_hid_layers):
                 last_out = tf.nn.relu(U.dense(last_out, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
             self.vpredz = U.dense(last_out, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
-
             self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean # raw = not standardized
 
+            # action
             last_out = ob
             for i in range(num_hid_layers):
                 last_out = tf.nn.relu(U.dense(last_out, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
@@ -66,9 +67,9 @@ def policy_fn(name, ob_space, ac_space):
                 pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
             else:
                 pdparam = U.dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
-
             self.pd = pdtype.pdfromflat(pdparam)
 
+            # ---
             self.state_in = []
             self.state_out = []
 
@@ -91,9 +92,9 @@ def policy_fn(name, ob_space, ac_space):
 if not demo:
     learn_kwargs = dict(
         timesteps_per_batch=1024, # horizon
-        max_kl=0.09, clip_param=0.2, entcoeff=0.01, # objective
+        max_kl=0.02, clip_param=0.2, entcoeff=0.01, # objective
         klcoeff=0.003, adapt_kl=0,
-        optim_epochs=16, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
+        optim_epochs=24, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
         gamma=0.99, lam=0.95, # advantage estimation
         )
 
@@ -168,7 +169,7 @@ else: # demo
     sess = tf.InteractiveSession(config=config)
 
     env = gym.make(env_id)
-    env.monitor.start("demo", force=True)
+    #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space
     pi = policy_fn("pi", ob_space, ac_space)
@@ -200,7 +201,7 @@ else: # demo
             uscore += r
             ts += 1
             if done: break
-            #env.render("human")
+            env.render("human")
         print("score=%0.2f length=%i" % (uscore, ts))
-        env.monitor.close()
+        #env.monitor.close()
 
