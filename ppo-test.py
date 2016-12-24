@@ -16,12 +16,15 @@ num_cpu = 8
 import gym
 experiment = sys.argv[1]
 print("experiment_name: '%s'" % experiment)
-env_id = "LunarLanderContinuous-v2"
-#env_id = "BipedalWalker-v2"
+#env_id = "LunarLanderContinuous-v2"
+env_id = "BipedalWalker-v2"
 max_timesteps = 2000000
 seed = 1339
 
 demo = len(sys.argv)>2 and sys.argv[2]=="demo"
+
+
+# ------------------------------- network ----------------------------------
 
 policy_kwargs = dict(
     hid_size=120,
@@ -89,9 +92,12 @@ def policy_fn(name, ob_space, ac_space):
 
     return ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, **policy_kwargs)
 
+
+# ------------------------- learn -----------------------------
+
 if not demo:
     learn_kwargs = dict(
-        timesteps_per_batch=1024, # horizon
+        timesteps_per_batch=2048, # horizon
         max_kl=0.02, clip_param=0.2, entcoeff=0.01, # objective
         klcoeff=0.003, adapt_kl=0,
         optim_epochs=24, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
