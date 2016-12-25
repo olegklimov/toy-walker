@@ -18,7 +18,7 @@ from gym.envs.registration import register
 register(
     id='CommandWalker-v0',
     entry_point='command_walker:CommandWalker',
-    timestep_limit=1000,
+    timestep_limit=300,
     )
 
 experiment = sys.argv[1]
