@@ -276,6 +276,7 @@ class CommandWalker(gym.Env):
         self.punish_energy_usage = 0.0
         self.step_reward = 0.0
         self.angle_reward = 0.0
+        self.reward_history = []
         if self.np_random.randint(low=0, high=+2)==1:
             self.external_command = +1
         else:
@@ -411,10 +412,25 @@ class CommandWalker(gym.Env):
         was_leg1_contact = self.legs[1].ground_contact > 0
 
         self.world.Step(1.0/FPS, 6*30, 2*30)
+        self.ts += 1
+
+        step_reward = 0
+        if was_leg0_contact==False and self.legs[0].ground_contact > 0 or was_leg1_contact==False and self.legs[1].ground_contact > 0:
+            step_reward = self._set_feet_target()
+            self.step_reward += step_reward
+
+        potential_hull_height, potential_leg_angle = self._potentials()
+
+        height_reward = potential_hull_height - self.potential_hull_height
+        angle_reward = potential_leg_angle - self.potential_leg_angle
+        self.potential_hull_height = potential_hull_height
+        self.potential_leg_angle = potential_leg_angle
+        #print("height_reward", height_reward, "potential_hull_height", potential_hull_height)
+        self.angle_reward += angle_reward
+        #print("angle_reward", angle_reward, "potential_leg_angle", potential_leg_angle)
 
         pos = self.hull.position
         vel = self.hull.linearVelocity
-        self.ts += 1
 
         for i in range(10):
             self.lidar[i].fraction = 1.0
@@ -455,25 +471,14 @@ class CommandWalker(gym.Env):
             punish_energy_usage += 0.01*0.00035 * MOTORS_TORQUE * np.clip(np.abs(a), 0, 1)
         self.punish_energy_usage += punish_energy_usage
 
-        step_reward = 0
-        if was_leg0_contact==False and self.legs[0].ground_contact > 0 or was_leg1_contact==False and self.legs[1].ground_contact > 0:
-            step_reward = self._set_feet_target()
-            self.step_reward += step_reward
-
-        potential_hull_height, potential_leg_angle = self._potentials()
-        height_reward = potential_hull_height - self.potential_hull_height
-        angle_reward = potential_leg_angle - self.potential_leg_angle
-        self.potential_hull_height = potential_hull_height
-        self.potential_leg_angle = potential_leg_angle
-        #print("height_reward", height_reward, "potential_hull_height", potential_hull_height)
-        self.angle_reward += angle_reward
-        #print("angle_reward", angle_reward, "potential_leg_angle", potential_leg_angle)
-
-        reward = step_reward + height_reward + angle_reward - punish_head_tilt - punish_energy_usage
+        reward = step_reward + height_reward + angle_reward - punish_energy_usage
+        self.reward_history.append(reward)
+        if len(self.reward_history) > 100:
+            self.reward_history.pop(0)
 
         done = False
         if self.game_over or pos[0] < 0:
-            reward = -100
+            reward = -1
             done   = True
         if pos[0] > (TERRAIN_LENGTH-TERRAIN_GRASS)*TERRAIN_STEP:
             print("STAT punish_energy_usage = %0.2f" % self.punish_energy_usage)
@@ -501,6 +506,8 @@ class CommandWalker(gym.Env):
             fwd = legs[0].position[0]
             targ[1] = fwd     + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
             targ[0] = targ[1] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+            if self.np_random.randint(low=0, high=+2)==1:
+                targ[0], targ[1] = targ[1], targ[0]
             self.reward_hull_x = self.hull.position[0]
             self.target_switch_ts = self.ts
 
@@ -509,7 +516,8 @@ class CommandWalker(gym.Env):
             missed_by = legs[0].position[0] - targ[0]
             traveled = self.hull.position[0] - self.reward_hull_x
             self.reward_hull_x = self.hull.position[0]
-            theoretical_reward = 2*130*traveled/SCALE   # twice as in BipedalWalker
+            #theoretical_reward = 2*130*traveled/SCALE   # twice as in BipedalWalker
+            theoretical_reward = 10.0
             reward = theoretical_reward * np.exp( - (missed_by/(MAX_TARG_STEP*0.5))**2 )          # exp(-2**2) = 2% of reward when missed by MAX_TARG_STEP
             #print("step reward: %0.2f" % reward)
             targ[1] = min(targ[1], legs[0].position[0] + MAX_TARG_STEP)      # if stepped short of the target, keep next step within possible limit
@@ -594,6 +602,15 @@ class CommandWalker(gym.Env):
             t = rendering.Transform(translation=(target_x, y))
             self.viewer.draw_circle(5/SCALE, 10, color=color).add_attr(t)
 
+        self.viewer.draw_polyline( [(
+            self.scroll + h/SCALE + 0.2*VIEWPORT_H/SCALE,
+            0.8*VIEWPORT_H/SCALE
+            ) for h in [0,100]], color=(0.3,0.3,0.3), linewidth=2)
+        self.viewer.draw_polyline( [(
+            self.scroll + h/SCALE + 0.2*VIEWPORT_H/SCALE,
+            0.8*VIEWPORT_H/SCALE + self.reward_history[h]/SCALE*100
+            ) for h in range(len(self.reward_history))], color=(1,0,0), linewidth=2)
+
         return self.viewer.render(return_rgb_array = mode=='rgb_array')
 
 class CommandWalkerHardcore(CommandWalker):
@@ -673,7 +690,7 @@ if __name__=="__main__":
         a = heuristic(env, s)
         s, r, done, info = env.step(a)
         total_reward += r
-        if steps % 2 == 0 or done:
+        if steps % 1 == 0 or done:
             print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
             print("step {} total_reward {:+0.2f}".format(steps, total_reward))
             print("hull " + str(["{:+0.2f}".format(x) for x in s[0:4] ]))
