@@ -14,10 +14,18 @@ from mpi4py import MPI
 num_cpu = 8
 
 import gym
+from gym.envs.registration import register
+register(
+    id='CommandWalker-v0',
+    entry_point='command_walker:CommandWalker',
+    timestep_limit=1000,
+    )
+
 experiment = sys.argv[1]
 print("experiment_name: '%s'" % experiment)
 #env_id = "LunarLanderContinuous-v2"
-env_id = "BipedalWalker-v2"
+#env_id = "BipedalWalker-v2"
+env_id = "CommandWalker-v0"
 max_timesteps = 2000000
 seed = 1339
 

@@ -55,6 +55,7 @@ HULL_POLY =[
     ]
 LEG_DOWN = -8/SCALE
 LEG_W, LEG_H = 8/SCALE, 34/SCALE
+MAX_TARG_STEP = 54/SCALE
 
 VIEWPORT_W = 600
 VIEWPORT_H = 400
@@ -65,6 +66,7 @@ TERRAIN_HEIGHT = VIEWPORT_H/SCALE/4
 TERRAIN_GRASS    = 10    # low long are grass spots, in steps
 TERRAIN_STARTPAD = 20    # in steps
 FRICTION = 2.5
+REWARD_STEP = 10
 
 class ContactDetector(contactListener):
     def __init__(self, env):
@@ -100,7 +102,7 @@ class CommandWalker(gym.Env):
         self.prev_shaping = None
         self._reset()
 
-        high = np.array([np.inf]*24)
+        high = np.array([np.inf]*26)
         self.action_space = spaces.Box(np.array([-1,-1,-1,-1]), np.array([+1,+1,+1,+1]))
         self.observation_space = spaces.Box(-high, high)
 
@@ -269,6 +271,7 @@ class CommandWalker(gym.Env):
         self.lidar_render = 0
         self.punish_head_tilt = 0.0
         self.punish_energy_usage = 0.0
+        self.step_reward = 0.0
         if self.np_random.randint(low=0, high=+2)==1:
             self.external_command = +1
         else:
@@ -282,7 +285,7 @@ class CommandWalker(gym.Env):
         self._generate_clouds()
 
         init_x = TERRAIN_STEP*TERRAIN_STARTPAD/2
-        init_y = TERRAIN_HEIGHT+2*LEG_H
+        init_y = TERRAIN_HEIGHT+2.1*LEG_H
         self.hull = self.world.CreateDynamicBody(
             position = (init_x, init_y),
             fixtures = fixtureDef(
@@ -391,6 +394,9 @@ class CommandWalker(gym.Env):
             self.joints[3].motorSpeed     = float(SPEED_KNEE    * np.sign(action[3]))
             self.joints[3].maxMotorTorque = float(MOTORS_TORQUE * np.clip(np.abs(action[3]), 0, 1))
 
+        was_leg0_contact = self.legs[0].ground_contact > 0
+        was_leg1_contact = self.legs[1].ground_contact > 0
+
         self.world.Step(1.0/FPS, 6*30, 2*30)
 
         pos = self.hull.position
@@ -418,10 +424,12 @@ class CommandWalker(gym.Env):
             self.joints[2].speed / SPEED_HIP,
             self.joints[3].angle + 1.0,
             self.joints[3].speed / SPEED_KNEE,
-            1.0 if self.legs[1].ground_contact>0 else 0.0
+            1.0 if self.legs[1].ground_contact>0 else 0.0,
+            (self.target[0] - self.hull.position[0]) / MAX_TARG_STEP,
+            (self.target[1] - self.hull.position[0]) / MAX_TARG_STEP,
             ]
         state += [l.fraction for l in self.lidar]
-        assert len(state)==24
+        assert len(state)==26
 
         self.scroll = pos.x - VIEWPORT_W/SCALE/2
 
@@ -433,7 +441,12 @@ class CommandWalker(gym.Env):
             punish_energy_usage += 0.00035 * MOTORS_TORQUE * np.clip(np.abs(a), 0, 1)
         self.punish_energy_usage += punish_energy_usage
 
-        reward = - punish_head_tilt - punish_energy_usage
+        step_reward = 0
+        if was_leg0_contact==False and self.legs[0].ground_contact > 0 or was_leg1_contact==False and self.legs[1].ground_contact > 0:
+            step_reward = self._set_feet_target()
+            self.step_reward += step_reward
+
+        reward = step_reward - punish_head_tilt - punish_energy_usage
 
         done = False
         if self.game_over or pos[0] < 0:
@@ -442,20 +455,48 @@ class CommandWalker(gym.Env):
         if pos[0] > (TERRAIN_LENGTH-TERRAIN_GRASS)*TERRAIN_STEP:
             print("STAT punish_energy_usage = %0.2f" % self.punish_energy_usage)
             print("STAT punish_head_tilt    = %0.2f" % self.punish_head_tilt)
+            print("STAT step_reward         = %0.2f" % self.step_reward)
             done   = True
         return np.array(state), reward, done, {}
 
     def _set_feet_target(self):
-        good = np.zeros( (2,) )
-        good[0] = self.legs[0].ground_contact
-        good[1] = self.legs[1].ground_contact
-        if self.legs[0].position[0] > self.legs[1].position[0]: good[0] += 0.1
-        else: good[1] += 0.1
-        fwd = max( self.legs[0].position[0], self.legs[1].position[0] )
-        self.target[0] = fwd + TERRAIN_STEP*3*self.np_random.uniform(0.1,1)
-        self.target[1] = self.target[0] + TERRAIN_STEP*3*self.np_random.uniform(0.1,1)
-        if good[1] > good[0]:
-            self.target[0], self.target[1] = self.target[1], self.target[0]
+        # want forward leg first
+        legs = self.legs[:]
+        targ = self.target[:]
+        swap = legs[1].position[0] > legs[0].position[0]
+        if swap:
+            legs[0], legs[1] = legs[1], legs[0]
+            targ[0], targ[1] = targ[1], targ[0]
+
+        #print("leg0: pos %0.2f contact %i" % (legs[0].position[0], legs[0].ground_contact))
+        #print("leg1: pos %0.2f contact %i" % (legs[1].position[0], legs[1].ground_contact))
+        reward = 0
+
+        if targ[0]==0 and targ[1]==0:
+            # initial
+            fwd = legs[0].position[0]
+            targ[1] = fwd     + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+            targ[0] = targ[1] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+            self.reward_hull_x = self.hull.position[0]
+
+        elif legs[0].ground_contact and targ[0] < targ[1]:
+            # target fulfilled
+            missed_by = legs[0].position[0] - targ[0]
+            traveled = self.hull.position[0] - self.reward_hull_x
+            self.reward_hull_x = self.hull.position[0]
+            theoretical_reward = 2*130*traveled/SCALE   # twice as in BipedalWalker
+            reward = theoretical_reward * np.exp( - (missed_by/(MAX_TARG_STEP*0.5))**2 )          # exp(-2**2) = 2% of reward when missed by MAX_TARG_STEP
+            #print("reward: %0.2f" % reward)
+            targ[1] = min(targ[1], legs[0].position[0] + MAX_TARG_STEP)      # if stepped short of the target, keep next step within possible limit
+            targ[1] = max(targ[1], legs[0].position[0] + 0.2*MAX_TARG_STEP)  # make target forward of leg
+            targ[0] = targ[1] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+
+        if swap:
+            self.target[0], self.target[1] = targ[1], targ[0]
+        else:
+            self.target[0], self.target[1] = targ[0], targ[1]
+
+        return reward
 
     def _render(self, mode='human', close=False):
         if close:
@@ -605,12 +646,15 @@ if __name__=="__main__":
         a = heuristic(env, s)
         s, r, done, info = env.step(a)
         total_reward += r
-        if steps % 20 == 0 or done:
+        if steps % 2 == 0 or done:
             print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
             print("step {} total_reward {:+0.2f}".format(steps, total_reward))
             print("hull " + str(["{:+0.2f}".format(x) for x in s[0:4] ]))
             print("leg0 " + str(["{:+0.2f}".format(x) for x in s[4:9] ]))
             print("leg1 " + str(["{:+0.2f}".format(x) for x in s[9:14]]))
+            print("targ " + str(["{:+0.2f}".format(x) for x in s[14:16]]))
         steps += 1
+        env.render()
+        env.render()
         env.render()
         if done: break
