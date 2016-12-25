@@ -18,7 +18,7 @@ from gym.envs.registration import register
 register(
     id='CommandWalker-v0',
     entry_point='command_walker:CommandWalker',
-    timestep_limit=300,
+    timestep_limit=1000,
     )
 
 experiment = sys.argv[1]
@@ -27,9 +27,11 @@ print("experiment_name: '%s'" % experiment)
 #env_id = "BipedalWalker-v2"
 env_id = "CommandWalker-v0"
 max_timesteps = 2000000
-seed = 1339
+seed = 1337
 
 demo = len(sys.argv)>2 and sys.argv[2]=="demo"
+load_previous_experiment = None
+if len(sys.argv)>2 and not demo: load_previous_experiment = sys.argv[2]
 
 
 # ------------------------------- network ----------------------------------
@@ -163,13 +165,23 @@ if not demo:
             saver = tf.train.Saver(var_list=tv_list)
             saver.save(sess, 'models/%s' % experiment)
 
+        def load_policy(pi):
+            if not load_previous_experiment: return
+            print("LOAD '%s'" % load_previous_experiment)
+            tv_list = pi.get_trainable_variables()
+            saver = tf.train.Saver(var_list=tv_list)
+            saver.restore(sess, 'models/%s' % load_previous_experiment)
+            sys.stdout.flush()
+
         #with sess:
         set_global_seeds(seed)
         env = gym.make(env_id)
         #gym.logger.setLevel(logging.WARN)
         env.seed(seed + 10000*rank)
         env.monitor.start(os.path.join(logger.get_expt_dir(), "monitor"), force=True, video_callable=False)
-        if rank==0: learn_kwargs["snapshot_callback"] = save_policy
+        if rank==0:
+            learn_kwargs["save_callback"] = save_policy
+        learn_kwargs["load_callback"] = load_policy
         pposgd.learn(env, policy_fn, max_timesteps=max_timesteps, **learn_kwargs)
         env.monitor.close()
 
@@ -183,7 +195,7 @@ else: # demo
     sess = tf.InteractiveSession(config=config)
 
     env = gym.make(env_id)
-    #env.monitor.start("demo", force=True)
+    env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space
     pi = policy_fn("pi", ob_space, ac_space)
@@ -204,7 +216,7 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 0 #np.zeros( (1,1) )
+            stochastic = 0
             a, vpred, *state = pi.act(stochastic, s, *state)
             r = 0
             sn, rplus, done, info = env.step(a)
@@ -216,5 +228,5 @@ else: # demo
             if done: break
             env.render("human")
         print("score=%0.2f length=%i" % (uscore, ts))
-        #env.monitor.close()
+        env.monitor.close()
 

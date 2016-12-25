@@ -468,10 +468,10 @@ class CommandWalker(gym.Env):
 
         punish_energy_usage = 0.0
         for a in action:
-            punish_energy_usage += 0.01*0.00035 * MOTORS_TORQUE * np.clip(np.abs(a), 0, 1)
+            punish_energy_usage += 0.1*0.00035 * MOTORS_TORQUE * np.clip(np.abs(a), 0, 1)
         self.punish_energy_usage += punish_energy_usage
 
-        reward = step_reward + height_reward + angle_reward - punish_energy_usage
+        reward = step_reward + angle_reward - punish_energy_usage
         self.reward_history.append(reward)
         if len(self.reward_history) > 100:
             self.reward_history.pop(0)
@@ -518,7 +518,7 @@ class CommandWalker(gym.Env):
             self.reward_hull_x = self.hull.position[0]
             #theoretical_reward = 2*130*traveled/SCALE   # twice as in BipedalWalker
             theoretical_reward = 10.0
-            reward = theoretical_reward * np.exp( - (missed_by/(MAX_TARG_STEP*0.5))**2 )          # exp(-2**2) = 2% of reward when missed by MAX_TARG_STEP
+            reward = theoretical_reward * np.exp( - (missed_by/(MAX_TARG_STEP*0.25))**2 )          # exp(-2**2) = 2% of reward when missed by MAX_TARG_STEP
             #print("step reward: %0.2f" % reward)
             targ[1] = min(targ[1], legs[0].position[0] + MAX_TARG_STEP)      # if stepped short of the target, keep next step within possible limit
             targ[1] = max(targ[1], legs[0].position[0] + 0.2*MAX_TARG_STEP)  # make target forward of leg
