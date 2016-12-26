@@ -67,7 +67,7 @@ TERRAIN_GRASS    = 10    # low long are grass spots, in steps
 TERRAIN_STARTPAD = 20    # in steps
 FRICTION = 2.5
 REWARD_STEP = 10
-HULL_HEIGHT_POTENTIAL =  0.5  # standing straight => legs maximum to the sides = ~60 units of distance, to reward using this coef
+HULL_HEIGHT_POTENTIAL = 0.02  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 LEG_ANGLE_POTENTIAL   = -1.0  # angle in radians, about -0.8..1.1,
 
 class ContactDetector(contactListener):
@@ -314,7 +314,7 @@ class CommandWalker(gym.Env):
                 angle = (i*0.05),
                 fixtures = fixtureDef(
                     shape=polygonShape(box=(LEG_W/2, LEG_H/2)),
-                    density=1.0,
+                    density=10.0,
                     restitution=0.0,
                     categoryBits=0x0020,
                     maskBits=0x001)
@@ -341,7 +341,7 @@ class CommandWalker(gym.Env):
                 angle = (i*0.05),
                 fixtures = fixtureDef(
                     shape=polygonShape(box=(0.8*LEG_W/2, LEG_H/2)),
-                    density=1.0,
+                    density=10.0,
                     restitution=0.0,
                     categoryBits=0x0020,
                     maskBits=0x001)
@@ -387,7 +387,7 @@ class CommandWalker(gym.Env):
         amplify = 1 + (self.ts - self.target_switch_ts) / 10
         return (
             HULL_HEIGHT_POTENTIAL * self.hull.position[1] * SCALE,
-            k * LEG_ANGLE_POTENTIAL * np.abs(self.joints[0].angle) - k * LEG_ANGLE_POTENTIAL * np.abs(self.joints[2].angle)
+            k * LEG_ANGLE_POTENTIAL * np.abs(self.joints[0].angle) - k * LEG_ANGLE_POTENTIAL * np.abs(self.joints[2].angle) - np.abs(self.hull.angle)
             )
 
     def _step(self, action):
@@ -471,7 +471,7 @@ class CommandWalker(gym.Env):
             punish_energy_usage += 0.1*0.00035 * MOTORS_TORQUE * np.clip(np.abs(a), 0, 1)
         self.punish_energy_usage += punish_energy_usage
 
-        reward = step_reward + angle_reward - punish_energy_usage
+        reward = step_reward + angle_reward + height_reward  # - punish_energy_usage
         self.reward_history.append(reward)
         if len(self.reward_history) > 100:
             self.reward_history.pop(0)

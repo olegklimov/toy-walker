@@ -18,7 +18,7 @@ from gym.envs.registration import register
 register(
     id='CommandWalker-v0',
     entry_point='command_walker:CommandWalker',
-    timestep_limit=1000,
+    timestep_limit=500,
     )
 
 experiment = sys.argv[1]
@@ -26,7 +26,7 @@ print("experiment_name: '%s'" % experiment)
 #env_id = "LunarLanderContinuous-v2"
 #env_id = "BipedalWalker-v2"
 env_id = "CommandWalker-v0"
-max_timesteps = 2000000
+max_timesteps = 8000000
 seed = 1337
 
 demo = len(sys.argv)>2 and sys.argv[2]=="demo"
@@ -109,7 +109,7 @@ if not demo:
     learn_kwargs = dict(
         timesteps_per_batch=2048, # horizon
         max_kl=0.02, clip_param=0.2, entcoeff=0.01, # objective
-        klcoeff=0.003, adapt_kl=0,
+        klcoeff=0.1, adapt_kl=0,
         optim_epochs=24, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
         gamma=0.99, lam=0.95, # advantage estimation
         )
@@ -195,7 +195,7 @@ else: # demo
     sess = tf.InteractiveSession(config=config)
 
     env = gym.make(env_id)
-    env.monitor.start("demo", force=True)
+    #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space
     pi = policy_fn("pi", ob_space, ac_space)
@@ -216,7 +216,7 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 0
+            stochastic = 1
             a, vpred, *state = pi.act(stochastic, s, *state)
             r = 0
             sn, rplus, done, info = env.step(a)
