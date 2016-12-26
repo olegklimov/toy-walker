@@ -15,6 +15,9 @@ num_cpu = 8
 
 import gym
 from gym.envs.registration import register
+from gym.wrappers import SkipWrapper
+skip_wrap = SkipWrapper(2)
+
 register(
     id='CommandWalker-v0',
     entry_point='command_walker:CommandWalker',
@@ -107,7 +110,7 @@ def policy_fn(name, ob_space, ac_space):
 
 if not demo:
     learn_kwargs = dict(
-        timesteps_per_batch=2048, # horizon
+        timesteps_per_batch=1024, # horizon
         max_kl=0.02, clip_param=0.2, entcoeff=0.01, # objective
         klcoeff=0.1, adapt_kl=0,
         optim_epochs=24, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
@@ -176,6 +179,8 @@ if not demo:
         #with sess:
         set_global_seeds(seed)
         env = gym.make(env_id)
+        env = skip_wrap(env)
+
         #gym.logger.setLevel(logging.WARN)
         env.seed(seed + 10000*rank)
         env.monitor.start(os.path.join(logger.get_expt_dir(), "monitor"), force=True, video_callable=False)
@@ -195,6 +200,7 @@ else: # demo
     sess = tf.InteractiveSession(config=config)
 
     env = gym.make(env_id)
+    #env = skip_wrap(env)
     #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space

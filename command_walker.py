@@ -57,19 +57,29 @@ LEG_DOWN = -8/SCALE
 LEG_W, LEG_H = 8/SCALE, 34/SCALE
 MAX_TARG_STEP = 54/SCALE
 
-VIEWPORT_W = 600
-VIEWPORT_H = 400
+VIEWPORT_W = 3600
+VIEWPORT_H = 500
 
 TERRAIN_STEP   = 14/SCALE
 TERRAIN_LENGTH = 200     # in steps
 TERRAIN_HEIGHT = VIEWPORT_H/SCALE/4
 TERRAIN_GRASS    = 10    # low long are grass spots, in steps
-TERRAIN_STARTPAD = 20    # in steps
+TERRAIN_STARTPAD = 10    # in steps
 FRICTION = 2.5
 REWARD_STEP = 10
 HULL_HEIGHT_POTENTIAL = 0.2  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 1.0  # keep head level
-LEG_ANGLE_POTENTIAL   = -1.0  # angle in radians, about -0.8..1.1,
+LEG_POTENTIAL         = 1.0  # angle in radians, about -0.8..1.1,
+
+def leg_targeting_potential(x, y):
+    '''
+    x - horizontal difference from target
+    y - vertical
+    https://academo.org/demos/3d-surface-plotter/?expression=(exp(-x%5E2)-0.5)%2F(1%2By)%2B0.02*(x-abs(x))&xRange=-5%2C%2B5&yRange=0%2C%2B10&resolution=100
+    '''
+    y = max(0,y)
+    scale = 1/(0.2*MAX_TARG_STEP)
+    return (np.exp(-(x*scale)**2)-0.5) / (1+y*scale) + 0.02*scale*(x-abs(x))
 
 class ContactDetector(contactListener):
     def __init__(self, env):
@@ -85,6 +95,14 @@ class ContactDetector(contactListener):
         for leg in self.env.legs:
             if leg in [contact.fixtureA.body, contact.fixtureB.body]:
                 leg.ground_contact -= 1
+
+class LidarCallback(Box2D.b2.rayCastCallback):
+    def ReportFixture(self, fixture, point, normal, fraction):
+        if (fixture.filterData.categoryBits & 1) == 0:
+            return 1
+        self.p2 = point
+        self.fraction = fraction
+        return 0
 
 class CommandWalker(gym.Env):
     metadata = {
@@ -143,7 +161,7 @@ class CommandWalker(gym.Env):
 
             if state==GRASS and not oneshot:
                 velocity = 0.8*velocity + 0.01*np.sign(TERRAIN_HEIGHT - y)
-                if i > TERRAIN_STARTPAD: velocity += self.np_random.uniform(-1, 1)/SCALE   #1
+                if i > TERRAIN_STARTPAD: velocity += 2*self.np_random.uniform(-1, 1)/SCALE
                 y += velocity
 
             elif state==PIT and oneshot:
@@ -214,9 +232,9 @@ class CommandWalker(gym.Env):
                 counter = stair_steps*stair_width
 
             elif state==STAIRS and not oneshot:
-                s = stair_steps*stair_width - counter - stair_height
+                s = stair_steps*stair_width - counter - 2 # - stair_height
                 n = s/stair_width
-                y = original_y + (n*stair_height)*TERRAIN_STEP
+                y = original_y + (n*stair_height-0.5)*TERRAIN_STEP
 
             oneshot = False
             self.terrain_y.append(y)
@@ -273,10 +291,8 @@ class CommandWalker(gym.Env):
         self.ts = 0
         self.scroll = 0.0
         self.lidar_render = 0
-        self.punish_head_tilt = 0.0
-        self.punish_energy_usage = 0.0
-        self.step_reward = 0.0
-        self.angle_reward = 0.0
+        self.reward_height = 0.0
+        self.reward_legs = 0.0
         self.reward_history = []
         if self.np_random.randint(low=0, high=+2)==1:
             self.external_command = +1
@@ -368,31 +384,14 @@ class CommandWalker(gym.Env):
 
         self.drawlist = self.terrain + self.leg_parts + [self.hull]
 
-        class LidarCallback(Box2D.b2.rayCastCallback):
-            def ReportFixture(self, fixture, point, normal, fraction):
-                if (fixture.filterData.categoryBits & 1) == 0:
-                    return 1
-                self.p2 = point
-                self.fraction = fraction
-                return 0
         self.lidar = [LidarCallback() for _ in range(10)]
 
         self.target = np.zeros( (2,) )
+        self.target_y = np.zeros( (2,) )
         self._set_feet_target()
-        self.potential_hull_height, self.potential_leg_angle = self._potentials()
+        self.potential_hull, self.potential_legs = self._potentials()
 
         return self._step(np.array([0,0,0,0]))[0]
-
-    def _potentials(self):
-        k = +1 if self.target[0] > self.target[1] else -1
-        amplify = 1 + (self.ts - self.target_switch_ts) / 10
-        above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
-        self.bad_height = above_legs < 1.4*LEG_H       # down on knees, get up!
-        above_legs = min( 0, above_legs - 1.4*LEG_H )  # non-zero and negative only when bad_height
-        return (
-            HULL_HEIGHT_POTENTIAL * above_legs * SCALE,
-            k*LEG_ANGLE_POTENTIAL*np.abs(self.joints[0].angle) - k*LEG_ANGLE_POTENTIAL*np.abs(self.joints[2].angle) - HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle)
-            )
 
     def _step(self, action):
         #self.hull.ApplyForceToCenter((0, 20), True) -- Uncomment this to receive a bit of stability help
@@ -418,20 +417,21 @@ class CommandWalker(gym.Env):
         self.world.Step(1.0/FPS, 6*30, 2*30)
         self.ts += 1
 
-        step_reward = 0
+        for leg in self.legs:
+            leg.tip_x = leg.position[0] + np.sin(leg.angle) * 0.5*LEG_H
+            leg.tip_y = leg.position[1] - np.cos(leg.angle) * 0.5*LEG_H
+
         if was_leg0_contact==False and self.legs[0].ground_contact > 0 or was_leg1_contact==False and self.legs[1].ground_contact > 0:
-            step_reward = self._set_feet_target()
-            self.step_reward += step_reward
+            self._set_feet_target()
 
-        potential_hull_height, potential_leg_angle = self._potentials()
+        potential_hull, potential_legs = self._potentials()
 
-        height_reward = potential_hull_height - self.potential_hull_height
-        angle_reward = potential_leg_angle - self.potential_leg_angle
-        self.potential_hull_height = potential_hull_height
-        self.potential_leg_angle = potential_leg_angle
-        #print("height_reward", height_reward, "potential_hull_height", potential_hull_height)
-        self.angle_reward += angle_reward
-        #print("angle_reward", angle_reward, "potential_leg_angle", potential_leg_angle)
+        reward_height = potential_hull - self.potential_hull
+        reward_legs = potential_legs - self.potential_legs
+        self.potential_hull = potential_hull
+        self.potential_legs = potential_legs
+        self.reward_legs += reward_legs
+        print("potential_legs %8.2f (%+8.2f)   potential_hull %8.2f (%+8.2f)" % (potential_legs, reward_legs, potential_hull, reward_height))
 
         pos = self.hull.position
         vel = self.hull.linearVelocity
@@ -467,15 +467,7 @@ class CommandWalker(gym.Env):
 
         self.scroll = pos.x - VIEWPORT_W/SCALE/2
 
-        punish_head_tilt = 0.01*0.5*abs(state[0])
-        self.punish_head_tilt += punish_head_tilt
-
-        punish_energy_usage = 0.0
-        for a in action:
-            punish_energy_usage += 0.1*0.00035 * MOTORS_TORQUE * np.clip(np.abs(a), 0, 1)
-        self.punish_energy_usage += punish_energy_usage
-
-        reward = step_reward + angle_reward + height_reward  # - punish_energy_usage
+        reward = reward_legs + reward_height
         self.reward_history.append(reward)
         if len(self.reward_history) > 100:
             self.reward_history.pop(0)
@@ -485,10 +477,8 @@ class CommandWalker(gym.Env):
             reward = -1
             done   = True
         if pos[0] > (TERRAIN_LENGTH-TERRAIN_GRASS)*TERRAIN_STEP:
-            print("STAT punish_energy_usage = %0.2f" % self.punish_energy_usage)
-            print("STAT punish_head_tilt    = %0.2f" % self.punish_head_tilt)
-            print("STAT angle_reward        = %0.2f" % self.angle_reward)
-            print("STAT step_reward         = %0.2f" % self.step_reward)
+            print("STAT reward_legs        = %0.2f" % self.reward_legs)
+            print("STAT reward_height      = %0.2f" % self.reward_height)
             done   = True
         return np.array(state), reward, done, {}
 
@@ -501,9 +491,7 @@ class CommandWalker(gym.Env):
             legs[0], legs[1] = legs[1], legs[0]
             targ[0], targ[1] = targ[1], targ[0]
 
-        #print("leg0: pos %0.2f contact %i" % (legs[0].position[0], legs[0].ground_contact))
-        #print("leg1: pos %0.2f contact %i" % (legs[1].position[0], legs[1].ground_contact))
-        reward = 0
+        reset_potential = False
 
         if targ[0]==0 and targ[1]==0:
             # initial
@@ -512,30 +500,43 @@ class CommandWalker(gym.Env):
             targ[0] = targ[1] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
             if self.np_random.randint(low=0, high=+2)==1:
                 targ[0], targ[1] = targ[1], targ[0]
-            self.reward_hull_x = self.hull.position[0]
             self.target_switch_ts = self.ts
 
         elif legs[0].ground_contact and targ[0] < targ[1]:
             # target fulfilled
-            missed_by = legs[0].position[0] - targ[0]
-            traveled = self.hull.position[0] - self.reward_hull_x
-            self.reward_hull_x = self.hull.position[0]
-            #theoretical_reward = 2*130*traveled/SCALE   # twice as in BipedalWalker
-            theoretical_reward = 10.0
-            reward = theoretical_reward * np.exp( - (missed_by/(MAX_TARG_STEP*0.25))**2 )          # exp(-2**2) = 2% of reward when missed by MAX_TARG_STEP
-            #print("step reward: %0.2f" % reward)
             targ[1] = min(targ[1], legs[0].position[0] + MAX_TARG_STEP)      # if stepped short of the target, keep next step within possible limit
             targ[1] = max(targ[1], legs[0].position[0] + 0.2*MAX_TARG_STEP)  # make target forward of leg
             targ[0] = targ[1] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
             self.target_switch_ts = self.ts
-            _, self.potential_leg_angle = self._potentials()
+            reset_potential = True
 
         if swap:
             self.target[0], self.target[1] = targ[1], targ[0]
         else:
             self.target[0], self.target[1] = targ[0], targ[1]
 
-        return reward
+        lidar = LidarCallback()
+        for i in [0,1]:
+            lidar.fraction = 1.0
+            lidar.p1 = (self.target[i], +1000)
+            lidar.p2 = (self.target[i], -1000)
+            self.world.RayCast(lidar, lidar.p1, lidar.p2)
+            self.target_y[i] = lidar.p2[1]
+
+        if reset_potential: # without feeding to reward (would be spike)
+            _, self.potential_legs = self._potentials()
+
+    def _potentials(self):
+        above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
+        self.bad_height = above_legs < 1.4*LEG_H       # down on knees, get up!
+        above_legs = min( 0, above_legs - 1.4*LEG_H )  # non-zero and negative only when bad_height
+
+        leg0_pot = leg_targeting_potential(self.legs[0].position[0] - self.target[0], self.legs[0].position[1] - self.target[1])
+        leg1_pot = leg_targeting_potential(self.legs[1].position[0] - self.target[0], self.legs[1].position[1] - self.target[1])
+        return (
+            HULL_HEIGHT_POTENTIAL * above_legs * SCALE,
+            LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot - HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle)
+            )
 
     def _render(self, mode='human', close=False):
         if close:
@@ -592,18 +593,20 @@ class CommandWalker(gym.Env):
         self.viewer.draw_polyline(f + [f[0]], color=(0,0,0), linewidth=2 )
 
         for leg in self.legs:
-            t = rendering.Transform(translation=leg.position)
             if leg.ground_contact > 0:
-                color = (0,1,0)
-            else:
-                color = (1,0,0)
-            self.viewer.draw_circle(3/SCALE, 10, color=color).add_attr(t)
+                t = rendering.Transform(translation=(leg.tip_x,leg.tip_y))
+                color = (0,0,1)
+                self.viewer.draw_circle(4/SCALE, 10, color=color).add_attr(t)
 
-        for target_x, color in zip([self.target[0], self.target[1]], [self.legs[0].color1, self.legs[1].color1]):
-            i = x / TERRAIN_STEP
-            i = int(np.clip(i, 0, len(self.terrain_y)))
-            y = self.terrain_y[i] - 10/SCALE
-            t = rendering.Transform(translation=(target_x, y))
+        for i in [0,1]:
+            target_x = self.target[i]
+            target_y = self.target_y[i]
+            color = self.legs[i].color1
+            self.viewer.draw_polyline( [(
+                target_x + dx,
+                target_y + 5*leg_targeting_potential(dx, 0),
+                ) for dx in np.arange(-MAX_TARG_STEP,+MAX_TARG_STEP,MAX_TARG_STEP/30)], color=color, linewidth=1)
+            t = rendering.Transform(translation=(target_x, target_y))
             self.viewer.draw_circle(5/SCALE, 10, color=color).add_attr(t)
 
         self.viewer.draw_polyline( [(
