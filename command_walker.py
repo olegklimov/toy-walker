@@ -67,7 +67,8 @@ TERRAIN_GRASS    = 10    # low long are grass spots, in steps
 TERRAIN_STARTPAD = 20    # in steps
 FRICTION = 2.5
 REWARD_STEP = 10
-HULL_HEIGHT_POTENTIAL = 0.02  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
+HULL_HEIGHT_POTENTIAL = 0.2  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
+HULL_ANGLE_POTENTIAL  = 1.0  # keep head level
 LEG_ANGLE_POTENTIAL   = -1.0  # angle in radians, about -0.8..1.1,
 
 class ContactDetector(contactListener):
@@ -385,9 +386,12 @@ class CommandWalker(gym.Env):
     def _potentials(self):
         k = +1 if self.target[0] > self.target[1] else -1
         amplify = 1 + (self.ts - self.target_switch_ts) / 10
+        above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
+        self.bad_height = above_legs < 1.4*LEG_H       # down on knees, get up!
+        above_legs = min( 0, above_legs - 1.4*LEG_H )  # non-zero and negative only when bad_height
         return (
-            HULL_HEIGHT_POTENTIAL * self.hull.position[1] * SCALE,
-            k * LEG_ANGLE_POTENTIAL * np.abs(self.joints[0].angle) - k * LEG_ANGLE_POTENTIAL * np.abs(self.joints[2].angle) - np.abs(self.hull.angle)
+            HULL_HEIGHT_POTENTIAL * above_legs * SCALE,
+            k*LEG_ANGLE_POTENTIAL*np.abs(self.joints[0].angle) - k*LEG_ANGLE_POTENTIAL*np.abs(self.joints[2].angle) - HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle)
             )
 
     def _step(self, action):
@@ -610,6 +614,9 @@ class CommandWalker(gym.Env):
             self.scroll + h/SCALE + 0.2*VIEWPORT_H/SCALE,
             0.8*VIEWPORT_H/SCALE + self.reward_history[h]/SCALE*100
             ) for h in range(len(self.reward_history))], color=(1,0,0), linewidth=2)
+
+        if self.bad_height:
+            self.viewer.draw_circle(10/SCALE, 10, color=(1,0,0)).add_attr(rendering.Transform(translation=(self.hull.position[0], self.hull.position[1])))
 
         return self.viewer.render(return_rgb_array = mode=='rgb_array')
 

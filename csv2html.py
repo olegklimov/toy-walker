@@ -33,7 +33,7 @@ html2 = """
         hAxis: {
             viewWindow: {
                 min: 0,
-                max: 2000000
+                max: 8000000
             }
         }
       };
