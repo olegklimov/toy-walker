@@ -18,6 +18,7 @@ from gym.envs.registration import register
 from gym.wrappers import SkipWrapper
 skip_wrap = SkipWrapper(2)
 
+import command_walker
 register(
     id='CommandWalker-v0',
     entry_point='command_walker:CommandWalker',
@@ -122,6 +123,7 @@ if not demo:
     #gamma=0.99, lam=0.9, # advantage estimation
 
     def train():
+        command_walker.verbose = 0
         whoami  = mpi_fork(num_cpu)
         print("MPI whoami == '%s'" % whoami, flush=True)
         if whoami == "parent":

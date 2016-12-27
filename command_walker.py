@@ -57,7 +57,7 @@ LEG_DOWN = -8/SCALE
 LEG_W, LEG_H = 8/SCALE, 34/SCALE
 MAX_TARG_STEP = 54/SCALE
 
-VIEWPORT_W = 3600
+VIEWPORT_W = 600
 VIEWPORT_H = 500
 
 TERRAIN_STEP   = 14/SCALE
@@ -66,10 +66,15 @@ TERRAIN_HEIGHT = VIEWPORT_H/SCALE/4
 TERRAIN_GRASS    = 10    # low long are grass spots, in steps
 TERRAIN_STARTPAD = 10    # in steps
 FRICTION = 2.5
-REWARD_STEP = 10
-HULL_HEIGHT_POTENTIAL = 1.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
-HULL_ANGLE_POTENTIAL  = 1.0  # keep head level
-LEG_POTENTIAL         = 1.0  # angle in radians, about -0.8..1.1,
+HULL_HEIGHT_POTENTIAL = 64.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
+HULL_ANGLE_POTENTIAL  = 10.0  # keep head level
+LEG_POTENTIAL         = 10.0  # angle in radians, about -0.8..1.1,
+SPEED_POTENTIAL       =  5.0
+
+verbose = 1
+def log(msg):
+    if verbose:
+        print(msg)
 
 def leg_targeting_potential(x, y):
     '''
@@ -292,14 +297,13 @@ class CommandWalker(gym.Env):
         self.scroll = 0.0
         self.lidar_render = 0
         self.reward_height = 0.0
-        self.reward_legs = 0.0
+        self.reward_legs   = 0.0
+        self.reward_angle  = 0.0
+        self.reward_speed  = 0.0
         self.reward_history = []
-        if self.np_random.randint(low=0, high=+2)==1:
-            self.external_command = +1
-        else:
-            self.external_command = -1
-        self.hull_desired_position = 1.45*LEG_H
-        #print("self.external_command", self.external_command)
+        self.external_command = 0
+        self.steps_done = 0
+        self.hull_desired_position = 1.50*LEG_H
 
         W = VIEWPORT_W/SCALE
         H = VIEWPORT_H/SCALE
@@ -337,8 +341,8 @@ class CommandWalker(gym.Env):
                     categoryBits=0x0020,
                     maskBits=0x001)
                 )
-            leg.color1 = (0.6-i/10., 0.3-i/10., 0.5-i/10.)
-            leg.color2 = (0.4-i/10., 0.2-i/10., 0.3-i/10.)
+            leg.color1 = (0.6+i/10., 0.3+i/10., 0.5+i/10.)
+            leg.color2 = (0.4+i/10., 0.2+i/10., 0.3+i/10.)
             rjd = revoluteJointDef(
                 bodyA=self.hull,
                 bodyB=leg,
@@ -364,8 +368,8 @@ class CommandWalker(gym.Env):
                     categoryBits=0x0020,
                     maskBits=0x001)
                 )
-            lower.color1 = (0.6-i/10., 0.3-i/10., 0.5-i/10.)
-            lower.color2 = (0.4-i/10., 0.2-i/10., 0.3-i/10.)
+            lower.color1 = leg.color1
+            lower.color2 = leg.color2
             rjd = revoluteJointDef(
                 bodyA=leg,
                 bodyB=lower,
@@ -383,14 +387,21 @@ class CommandWalker(gym.Env):
             self.legs.append(lower)
             self.joints.append(self.world.CreateJoint(rjd))
 
+        self.leg_parts.reverse()
         self.drawlist = self.terrain + self.leg_parts + [self.hull]
 
         self.lidar = [LidarCallback() for _ in range(10)]
 
         self.target = np.zeros( (2,) )
-        self.target_y = np.zeros( (2,) )
-        self._set_feet_target()
-        self.potential_hull, self.potential_legs = self._potentials()
+        self.hill_x = np.zeros( (2,) )
+        self.hill_y = np.zeros( (2,) )
+        self.leg_active = 0
+        self.legs[0].tip_x = 0  # dummy values
+        self.legs[0].tip_y = 0
+        self.legs[1].tip_x = 0
+        self.legs[1].tip_y = 0
+        self.world.Step(1.0/FPS, 6*30, 2*30)
+        _, self.potential_height, self.potential_angle, self.potential_speed = self._potentials()  # used here, first result ignored
 
         return self._step(np.array([0,0,0,0]))[0]
 
@@ -422,18 +433,31 @@ class CommandWalker(gym.Env):
             leg.tip_x = leg.position[0] + np.sin(leg.angle) * 0.5*LEG_H
             leg.tip_y = leg.position[1] - np.cos(leg.angle) * 0.5*LEG_H
 
-        if was_leg0_contact==False and self.legs[0].ground_contact > 0 or was_leg1_contact==False and self.legs[1].ground_contact > 0:
-            self._set_feet_target()
+        #if was_leg0_contact==False and self.legs[0].ground_contact > 0 or was_leg1_contact==False and self.legs[1].ground_contact > 0:
+        self._set_feet_target()
 
-        potential_hull, potential_legs = self._potentials()
+        potential_legs, potential_height, potential_angle, potential_speed = self._potentials()
 
-        reward_height = potential_hull - self.potential_hull
-        reward_legs = potential_legs - self.potential_legs
-        self.potential_hull = potential_hull
-        self.potential_legs = potential_legs
-        self.reward_legs += reward_legs
+        reward_legs   = potential_legs   - self.potential_legs
+        reward_height = potential_height - self.potential_height
+        reward_angle  = potential_angle  - self.potential_angle
+        reward_speed  = potential_speed  - self.potential_speed
+        self.potential_legs   = potential_legs
+        self.potential_height = potential_height
+        self.potential_angle  = potential_angle
+        self.potential_speed  = potential_speed
+        self.reward_legs   += reward_legs
+        self.reward_height += reward_height
+        self.reward_angle  += reward_angle
+        self.reward_speed  += reward_speed
         #####################################################################################################################################
-        print("potential_legs %8.2f (%+8.2f)   potential_hull %8.2f (%+8.2f)" % (potential_legs, reward_legs, potential_hull, reward_height))
+        log("potential_legs %8.2f (%+8.2f)   potential_height %8.2f (%+8.2f)  potential_angle %8.2f (%+8.2f)   potential_speed %8.2f (%+8.2f)" %
+            (potential_legs,reward_legs, potential_height,reward_height, potential_angle,reward_angle, potential_speed,reward_speed))
+        #####################################################################################################################################
+        reward = reward_legs + reward_height + reward_angle + reward_speed
+        self.reward_history.append(reward)
+        if len(self.reward_history) > 100:
+            self.reward_history.pop(0)
 
         pos = self.hull.position
         vel = self.hull.linearVelocity
@@ -469,82 +493,96 @@ class CommandWalker(gym.Env):
 
         self.scroll = pos.x - VIEWPORT_W/SCALE/2
 
-        reward = reward_legs + reward_height
-        self.reward_history.append(reward)
-        if len(self.reward_history) > 100:
-            self.reward_history.pop(0)
-
         done = False
         if self.game_over or pos[0] < 0:
             reward = -1
             done   = True
         if pos[0] > (TERRAIN_LENGTH-TERRAIN_GRASS)*TERRAIN_STEP:
-            print("STAT reward_legs        = %0.2f" % self.reward_legs)
-            print("STAT reward_height      = %0.2f" % self.reward_height)
+            log("STAT reward_legs        = %0.2f" % self.reward_legs)
+            log("STAT reward_height      = %0.2f" % self.reward_height)
+            log("STAT reward_angle       = %0.2f" % self.reward_angle)
+            log("STAT reward_speed       = %0.2f" % self.reward_speed)
             done   = True
         return np.array(state), reward, done, {}
 
     def _set_feet_target(self):
-        # want forward leg first
-        legs = self.legs[:]
-        targ = self.target[:]
-        swap = legs[1].position[0] > legs[0].position[0]
-        if swap:
-            legs[0], legs[1] = legs[1], legs[0]
-            targ[0], targ[1] = targ[1], targ[0]
+        legs = self.legs
+        targ = self.target
+        hill = self.hill_x
+        a = self.leg_active
 
         reset_potential = False
-
-        if targ[0]==0 and targ[1]==0:
-            # initial
-            fwd = legs[0].position[0]
-            targ[1] = fwd     + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
-            targ[0] = targ[1] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
-            if self.np_random.randint(low=0, high=+2)==1:
-                targ[0], targ[1] = targ[1], targ[0]
-            self.target_switch_ts = self.ts
-
-        elif legs[0].ground_contact and targ[0] < targ[1]:
-            # target fulfilled
-            targ[1] = min(targ[1], legs[0].position[0] + MAX_TARG_STEP)      # if stepped short of the target, keep next step within possible limit
-            targ[1] = max(targ[1], legs[0].position[0] + 0.2*MAX_TARG_STEP)  # make target forward of leg
-            targ[0] = targ[1] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
-            self.target_switch_ts = self.ts
+        allow_random_command = 0.0
+        if self.external_command in [0]:     allow_random_command = 0.05 if legs[0].ground_contact and legs[1].ground_contact else 0.0
+        if self.external_command in [-1,+1]: allow_random_command = 0.01 if self.steps_done >= 2 else 0.0
+        if self.np_random.rand() < allow_random_command:
+            while 1:
+                new_command = self.np_random.randint(low=0, high=+2)
+                if self.external_command==new_command: continue
+                break
+            if new_command in [+1,+2]: a = (1 if targ[1] < targ[0] else 0)  # back leg active
+            if new_command in [0]: hill[0],hill[1] = targ[0],targ[1] = legs[0].tip_x,legs[1].tip_x
+            log("COMMAND %+i -> %+i, active=%i" % (self.external_command, new_command, a))
+            self.external_command = new_command
             reset_potential = True
 
-        if swap:
-            self.target[0], self.target[1] = targ[1], targ[0]
-        else:
-            self.target[0], self.target[1] = targ[0], targ[1]
+        if targ[0]==0 and targ[1]==0: # initial
+            diff = MAX_TARG_STEP*self.np_random.uniform(0.1, 0.5)
+            targ[1] = self.hull.position[0] + diff
+            targ[0] = self.hull.position[0] - diff
+            if self.np_random.rand() > 0.5: targ[0], targ[1] = targ[1], targ[0]
+            hill[0] = targ[0]
+            hill[1] = targ[1]
+            reset_potential = True
+            assert(self.external_command==0)  # starts in the air
+
+        elif self.external_command==0:
+            self.steps_done = 0
+
+        elif self.external_command==+1:
+            assert(targ[a] < targ[1-a]) # loop invariant for walking
+            if targ[a] < hill[1-a]:  # here from STOP command (targ[a] was on left, hill[1-a] stays the same to compare correctly)
+                log("DETECTED +1 FROM STOP")
+                hill[1-a] = legs[1-a].tip_x
+                targ[a]   = legs[1-a].tip_x + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+                hill[a]   = targ[a]
+                targ[1-a] = targ[a] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+                reset_potential = True
+            if legs[a].ground_contact and legs[a].tip_x > legs[1-a].tip_x: # step made
+                self.steps_done += 1
+                log("STEP +1 SWITCH LEGS")
+                hill[a]   = legs[a].tip_x # de-facto leg placement, turn into potential well
+                targ[1-a] = np.clip(targ[1-a], legs[a].tip_x + 0.2*MAX_TARG_STEP, legs[a].tip_x + MAX_TARG_STEP) # long-visible target becomes gravity well
+                hill[1-a] = targ[1-a]
+                targ[a]   = targ[1-a] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+                a = 1-a
+                reset_potential = True
+            allow_random_command = 0.01
 
         lidar = LidarCallback()
         for i in [0,1]:
             lidar.fraction = 1.0
-            lidar.p1 = (self.target[i], +1000)
-            lidar.p2 = (self.target[i], -1000)
+            lidar.p1 = (self.hill_x[i], +1000)
+            lidar.p2 = (self.hill_x[i], -1000)
             self.world.RayCast(lidar, lidar.p1, lidar.p2)
-            self.target_y[i] = lidar.p2[1]
+            self.hill_y[i] = lidar.p2[1]
 
         if reset_potential: # without feeding to reward (would be spike)
-            _, self.potential_legs = self._potentials()
+            self.potential_legs, _, _, self.potential_speed = self._potentials()
+        self.leg_active = a
 
     def _potentials(self):
         self.hull_above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
-        potential_hull = - HULL_HEIGHT_POTENTIAL * abs( self.hull_desired_position - self.hull_above_legs ) / LEG_H
+        potential_height = np.square( (self.hull_desired_position - self.hull_above_legs) / LEG_H )
 
-        #self.bad_height = above_legs < 1.4*LEG_H       # down on knees, get up!
-        #above_legs = min( 0, above_legs - 1.4*LEG_H )  # non-zero and negative only when bad_height
-
-        leg0_pot = 0
-        leg1_pot = 0
-        if self.target[0] > self.target[1]:
-            leg1_pot = leg_targeting_potential(self.legs[1].position[0] - self.target[0], self.legs[1].position[1] - self.target[1])
-        else:
-            leg0_pot = leg_targeting_potential(self.legs[0].position[0] - self.target[0], self.legs[0].position[1] - self.target[1])
+        leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
+        leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
 
         return (
-            potential_hull,
-            LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot - HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle)
+            LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot,
+            -HULL_HEIGHT_POTENTIAL*potential_height,
+            -HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle),
+            SPEED_POTENTIAL*(self.external_command * 0.3*self.hull.linearVelocity.x*(VIEWPORT_W/SCALE)/FPS)
             )
 
     def _render(self, mode='human', close=False):
@@ -581,7 +619,6 @@ class CommandWalker(gym.Env):
             self.viewer.draw_polyline( [l.p1, l.p2], color=(1,0,0), linewidth=1 )
 
         # self.hull_above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
-        # potential_hull = HULL_HEIGHT_POTENTIAL * abs( self.hull_desired_position - self.hull_above_legs ) / LEG_H
         x = self.hull.position[0]
         y = self.hull_desired_position + 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
         self.viewer.draw_polyline( [(x+dx,y) for dx in [-2*MAX_TARG_STEP,+2*MAX_TARG_STEP]], color=(1,0,0), linewidth=1 )
@@ -612,16 +649,20 @@ class CommandWalker(gym.Env):
                 t = rendering.Transform(translation=(leg.tip_x,leg.tip_y))
                 color = (0,0,1)
                 self.viewer.draw_circle(4/SCALE, 10, color=color).add_attr(t)
+            if leg==self.legs[self.leg_active]:
+                t = rendering.Transform(translation=leg.position)
+                self.viewer.draw_circle(2/SCALE, 10, color=(1,0,0)).add_attr(t)
 
         for i in [0,1]:
+            hill_x = self.hill_x[i]
             target_x = self.target[i]
-            target_y = self.target_y[i]
+            hill_y = self.hill_y[i]
             color = self.legs[i].color1
             self.viewer.draw_polyline( [(
-                target_x + dx,
-                target_y + 5*leg_targeting_potential(dx, 0),
+                hill_x + dx,
+                hill_y + 5*leg_targeting_potential(dx, 0),
                 ) for dx in np.arange(-MAX_TARG_STEP,+MAX_TARG_STEP,MAX_TARG_STEP/30)], color=color, linewidth=1)
-            t = rendering.Transform(translation=(target_x, target_y))
+            t = rendering.Transform(translation=(target_x, hill_y))
             self.viewer.draw_circle(5/SCALE, 10, color=color).add_attr(t)
 
         self.viewer.draw_polyline( [(
@@ -713,12 +754,12 @@ if __name__=="__main__":
         s, r, done, info = env.step(a)
         total_reward += r
         if steps % 1 == 0 or done:
-            print("\naction " + str(["{:+0.2f}".format(x) for x in a]))
-            print("step {} total_reward {:+0.2f}".format(steps, total_reward))
-            print("hull " + str(["{:+0.2f}".format(x) for x in s[0:4] ]))
-            print("leg0 " + str(["{:+0.2f}".format(x) for x in s[4:9] ]))
-            print("leg1 " + str(["{:+0.2f}".format(x) for x in s[9:14]]))
-            print("targ " + str(["{:+0.2f}".format(x) for x in s[14:16]]))
+            log("\naction " + str(["{:+0.2f}".format(x) for x in a]))
+            log("step {} total_reward {:+0.2f}".format(steps, total_reward))
+            log("hull " + str(["{:+0.2f}".format(x) for x in s[0:4] ]))
+            log("leg0 " + str(["{:+0.2f}".format(x) for x in s[4:9] ]))
+            log("leg1 " + str(["{:+0.2f}".format(x) for x in s[9:14]]))
+            log("targ " + str(["{:+0.2f}".format(x) for x in s[14:16]]))
         steps += 1
         env.render()
         if done: break
