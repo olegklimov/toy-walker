@@ -67,7 +67,7 @@ TERRAIN_GRASS    = 10    # low long are grass spots, in steps
 TERRAIN_STARTPAD = 10    # in steps
 FRICTION = 2.5
 REWARD_STEP = 10
-HULL_HEIGHT_POTENTIAL = 0.2  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
+HULL_HEIGHT_POTENTIAL = 1.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 1.0  # keep head level
 LEG_POTENTIAL         = 1.0  # angle in radians, about -0.8..1.1,
 
@@ -298,6 +298,7 @@ class CommandWalker(gym.Env):
             self.external_command = +1
         else:
             self.external_command = -1
+        self.hull_desired_position = 1.45*LEG_H
         #print("self.external_command", self.external_command)
 
         W = VIEWPORT_W/SCALE
@@ -431,6 +432,7 @@ class CommandWalker(gym.Env):
         self.potential_hull = potential_hull
         self.potential_legs = potential_legs
         self.reward_legs += reward_legs
+        #####################################################################################################################################
         print("potential_legs %8.2f (%+8.2f)   potential_hull %8.2f (%+8.2f)" % (potential_legs, reward_legs, potential_hull, reward_height))
 
         pos = self.hull.position
@@ -527,14 +529,21 @@ class CommandWalker(gym.Env):
             _, self.potential_legs = self._potentials()
 
     def _potentials(self):
-        above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
-        self.bad_height = above_legs < 1.4*LEG_H       # down on knees, get up!
-        above_legs = min( 0, above_legs - 1.4*LEG_H )  # non-zero and negative only when bad_height
+        self.hull_above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
+        potential_hull = - HULL_HEIGHT_POTENTIAL * abs( self.hull_desired_position - self.hull_above_legs ) / LEG_H
 
-        leg0_pot = leg_targeting_potential(self.legs[0].position[0] - self.target[0], self.legs[0].position[1] - self.target[1])
-        leg1_pot = leg_targeting_potential(self.legs[1].position[0] - self.target[0], self.legs[1].position[1] - self.target[1])
+        #self.bad_height = above_legs < 1.4*LEG_H       # down on knees, get up!
+        #above_legs = min( 0, above_legs - 1.4*LEG_H )  # non-zero and negative only when bad_height
+
+        leg0_pot = 0
+        leg1_pot = 0
+        if self.target[0] > self.target[1]:
+            leg1_pot = leg_targeting_potential(self.legs[1].position[0] - self.target[0], self.legs[1].position[1] - self.target[1])
+        else:
+            leg0_pot = leg_targeting_potential(self.legs[0].position[0] - self.target[0], self.legs[0].position[1] - self.target[1])
+
         return (
-            HULL_HEIGHT_POTENTIAL * above_legs * SCALE,
+            potential_hull,
             LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot - HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle)
             )
 
@@ -570,6 +579,12 @@ class CommandWalker(gym.Env):
         if i < 2*len(self.lidar):
             l = self.lidar[i] if i < len(self.lidar) else self.lidar[len(self.lidar)-i-1]
             self.viewer.draw_polyline( [l.p1, l.p2], color=(1,0,0), linewidth=1 )
+
+        # self.hull_above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
+        # potential_hull = HULL_HEIGHT_POTENTIAL * abs( self.hull_desired_position - self.hull_above_legs ) / LEG_H
+        x = self.hull.position[0]
+        y = self.hull_desired_position + 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
+        self.viewer.draw_polyline( [(x+dx,y) for dx in [-2*MAX_TARG_STEP,+2*MAX_TARG_STEP]], color=(1,0,0), linewidth=1 )
 
         for obj in self.drawlist:
             for f in obj.fixtures:
@@ -617,9 +632,6 @@ class CommandWalker(gym.Env):
             self.scroll + h/SCALE + 0.2*VIEWPORT_H/SCALE,
             0.8*VIEWPORT_H/SCALE + self.reward_history[h]/SCALE*100
             ) for h in range(len(self.reward_history))], color=(1,0,0), linewidth=2)
-
-        if self.bad_height:
-            self.viewer.draw_circle(10/SCALE, 10, color=(1,0,0)).add_attr(rendering.Transform(translation=(self.hull.position[0], self.hull.position[1])))
 
         return self.viewer.render(return_rgb_array = mode=='rgb_array')
 
