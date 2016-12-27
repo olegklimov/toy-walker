@@ -66,10 +66,10 @@ TERRAIN_HEIGHT = VIEWPORT_H/SCALE/4
 TERRAIN_GRASS    = 10    # low long are grass spots, in steps
 TERRAIN_STARTPAD = 10    # in steps
 FRICTION = 2.5
-HULL_HEIGHT_POTENTIAL = 64.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
+HULL_HEIGHT_POTENTIAL = 10.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 10.0  # keep head level
-LEG_POTENTIAL         = 10.0  # angle in radians, about -0.8..1.1,
-SPEED_POTENTIAL       =  5.0
+LEG_POTENTIAL         = 20.0
+SPEED_POTENTIAL       =  1.0
 
 verbose = 1
 def log(msg):
@@ -83,8 +83,8 @@ def leg_targeting_potential(x, y):
     https://academo.org/demos/3d-surface-plotter/?expression=(exp(-x%5E2)-0.5)%2F(1%2By)%2B0.02*(x-abs(x))&xRange=-5%2C%2B5&yRange=0%2C%2B10&resolution=100
     '''
     y = max(0,y)
-    scale = 1/(0.2*MAX_TARG_STEP)
-    return (np.exp(-(x*scale)**2)-0.5) / (1+y*scale) + 0.02*scale*(x-abs(x))
+    scale = 1/(0.4*MAX_TARG_STEP)
+    return (np.exp(-(x*scale)**2)-0.5) / (1+y*scale) - 0.25*scale*abs(x)
 
 class ContactDetector(contactListener):
     def __init__(self, env):
@@ -455,7 +455,8 @@ class CommandWalker(gym.Env):
             (potential_legs,reward_legs, potential_height,reward_height, potential_angle,reward_angle, potential_speed,reward_speed))
         #####################################################################################################################################
         reward = reward_legs + reward_height + reward_angle + reward_speed
-        self.reward_history.append(reward)
+        #self.reward_history.append(reward)
+        self.reward_history.append(self.reward_legs + self.reward_height + self.reward_angle + self.reward_speed)
         if len(self.reward_history) > 100:
             self.reward_history.pop(0)
 
@@ -576,16 +577,23 @@ class CommandWalker(gym.Env):
 
     def _potentials(self):
         self.hull_above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
-        potential_height = np.square( (self.hull_desired_position - self.hull_above_legs) / LEG_H )
+        potential_height =  (self.hull_above_legs - self.hull_desired_position) / LEG_H
+        #self.hull_desired_position = 1.50*LEG_H
+        #print(potential_height)
+        if potential_height < -0.55: self.game_over = True
 
         leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
         leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
 
+        speed = 0
+        if self.external_command in [+1,-1]:
+            speed = np.abs( self.joints[0].speed / SPEED_HIP - self.joints[2].speed / SPEED_HIP )
+
         return (
             LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot,
-            -HULL_HEIGHT_POTENTIAL*potential_height,
+            -HULL_HEIGHT_POTENTIAL*np.abs(potential_height),
             -HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle),
-            SPEED_POTENTIAL*(self.external_command * 0.3*self.hull.linearVelocity.x*(VIEWPORT_W/SCALE)/FPS)
+            SPEED_POTENTIAL*speed
             )
 
     def _render(self, mode='human', close=False):
@@ -663,8 +671,8 @@ class CommandWalker(gym.Env):
             color = self.legs[i].color1
             self.viewer.draw_polyline( [(
                 hill_x + dx,
-                hill_y + 5*leg_targeting_potential(dx, 0),
-                ) for dx in np.arange(-MAX_TARG_STEP,+MAX_TARG_STEP,MAX_TARG_STEP/30)], color=color, linewidth=1)
+                hill_y + 0.5*leg_targeting_potential(dx, 0),
+                ) for dx in np.arange(-2*MAX_TARG_STEP,+2*MAX_TARG_STEP,MAX_TARG_STEP/15)], color=color, linewidth=1)
             t = rendering.Transform(translation=(target_x, hill_y))
             self.viewer.draw_circle(5/SCALE, 10, color=color).add_attr(t)
 
@@ -674,7 +682,7 @@ class CommandWalker(gym.Env):
             ) for h in [0,100]], color=(0.3,0.3,0.3), linewidth=2)
         self.viewer.draw_polyline( [(
             self.scroll + h/SCALE + 0.2*VIEWPORT_H/SCALE,
-            0.8*VIEWPORT_H/SCALE + self.reward_history[h]/SCALE*100
+            0.8*VIEWPORT_H/SCALE + self.reward_history[h]/SCALE
             ) for h in range(len(self.reward_history))], color=(1,0,0), linewidth=2)
 
         return self.viewer.render(return_rgb_array = mode=='rgb_array')

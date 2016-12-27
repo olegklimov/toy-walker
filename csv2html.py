@@ -16,6 +16,7 @@ function drawBasic() {
       //data.addColumn('number', 'loss_pol_surr');
       data.addColumn('number', 'loss_vf_loss');
       data.addColumn('number', 'loss_kl');
+      data.addColumn('number', 'ev_tdlam_before')
       data.addColumn('number', 'EpRewMean');
       data.addColumn('number', 'EpLenMean');
       data.addRows([
@@ -27,8 +28,9 @@ html2 = """
         series: {
           0: {targetAxisIndex: 0},
           1: {targetAxisIndex: 0},
-          2: {targetAxisIndex: 1},
+          2: {targetAxisIndex: 0},
           3: {targetAxisIndex: 1},
+          4: {targetAxisIndex: 1},
         },
         hAxis: {
             viewWindow: {
@@ -58,8 +60,10 @@ for fn in need_files:
     fn_html = "%s.html" % fn
     fn_csv  = "%s.csv" % fn
     print("file://%s/%s.html" % (os.getcwd(), fn))
-    if os.path.getmtime(fn_html) >= os.path.getmtime(fn_csv):
-        continue
+    try:
+        if os.path.getmtime(fn_html) >= os.path.getmtime(fn_csv):
+            continue
+    except: pass
     print("CONVERT")
     with open(fn_html, "w") as w:
         w.write(html1)
@@ -73,6 +77,7 @@ for fn in need_files:
                     #row["loss_pol_surr"],
                     row["loss_vf_loss"],
                     row["loss_kl"],
+                    row["ev_tdlam_before"],
                     row["EpRewMean"],
                     row["EpLenMean"],
                     ])
