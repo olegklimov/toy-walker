@@ -55,9 +55,15 @@ for root, dirs, files in os.walk("progress"):
             need_files.append(fn)
 
 for fn in need_files:
-    with open("%s.html" % fn, "w") as w:
+    fn_html = "%s.html" % fn
+    fn_csv  = "%s.csv" % fn
+    print("file://%s/%s.html" % (os.getcwd(), fn))
+    if os.path.getmtime(fn_html) >= os.path.getmtime(fn_csv):
+        continue
+    print("CONVERT")
+    with open(fn_html, "w") as w:
         w.write(html1)
-        with open('%s.csv' % fn, newline='') as f:
+        with open(fn_csv, newline='') as f:
             #reader = csv.reader(f)
             reader = csv.DictReader(f)
             for row in reader:
@@ -72,4 +78,3 @@ for fn in need_files:
                     ])
                     ))
         w.write(html2)
-    print("file://%s/%s.html" % (os.getcwd(), fn))
