@@ -128,7 +128,7 @@ class CommandWalker(gym.Env):
         self.prev_shaping = None
         self._reset()
 
-        high = np.array([np.inf]*26)
+        high = np.array([np.inf]*29)
         self.action_space = spaces.Box(np.array([-1,-1,-1,-1]), np.array([+1,+1,+1,+1]))
         self.observation_space = spaces.Box(-high, high)
 
@@ -487,9 +487,12 @@ class CommandWalker(gym.Env):
             1.0 if self.legs[1].ground_contact>0 else 0.0,
             (self.target[0] - self.hull.position[0]) / MAX_TARG_STEP,
             (self.target[1] - self.hull.position[0]) / MAX_TARG_STEP,
+            self.external_command,
+            0,  # self.hull_desired_position,
+            0,  # jump
             ]
         state += [l.fraction for l in self.lidar]
-        assert len(state)==26
+        assert len(state)==29
 
         self.scroll = pos.x - VIEWPORT_W/SCALE/2
 
