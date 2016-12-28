@@ -71,6 +71,8 @@ HULL_ANGLE_POTENTIAL  = 25.0  # keep head level
 LEG_POTENTIAL         = 20.0
 SPEED_POTENTIAL       =  1.0
 STOP_SPEED_POTENTIAL  = 20.0
+REWARD_CRASH          = -10.0
+REWARD_STOP_PER_FRAME = 1.0
 
 verbose = 1
 def log(msg):
@@ -456,6 +458,8 @@ class CommandWalker(gym.Env):
             (potential_legs,reward_legs, potential_height,reward_height, potential_angle,reward_angle, potential_speed,reward_speed))
         #####################################################################################################################################
         reward = reward_legs + reward_height + reward_angle + reward_speed
+        if self.external_command==0 and self.legs[0].ground_contact and self.legs[1].ground_contact:
+            reward += REWARD_STOP_PER_FRAME
         #self.reward_history.append(reward)
         self.reward_history.append(self.reward_legs + self.reward_height + self.reward_angle + self.reward_speed)
         if len(self.reward_history) > 100:
@@ -500,7 +504,7 @@ class CommandWalker(gym.Env):
 
         done = False
         if self.game_over or pos[0] < 0:
-            reward = -1
+            reward = REWARD_CRASH
             done   = True
         if pos[0] > (TERRAIN_LENGTH-TERRAIN_GRASS)*TERRAIN_STEP:
             log("STAT reward_legs        = %0.2f" % self.reward_legs)
