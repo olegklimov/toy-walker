@@ -112,8 +112,8 @@ def policy_fn(name, ob_space, ac_space):
 if not demo:
     learn_kwargs = dict(
         timesteps_per_batch=1024, # horizon
-        max_kl=0.02, clip_param=0.2, entcoeff=0.01, # objective
-        klcoeff=0.1, adapt_kl=0,
+        max_kl=0.03, clip_param=0.2, entcoeff=0.00, # objective
+        klcoeff=1.0, adapt_kl=0,
         optim_epochs=24, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
         gamma=0.99, lam=0.95, # advantage estimation
         )

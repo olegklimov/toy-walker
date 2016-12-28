@@ -67,9 +67,10 @@ TERRAIN_GRASS    = 10    # low long are grass spots, in steps
 TERRAIN_STARTPAD = 10    # in steps
 FRICTION = 2.5
 HULL_HEIGHT_POTENTIAL = 10.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
-HULL_ANGLE_POTENTIAL  = 10.0  # keep head level
+HULL_ANGLE_POTENTIAL  = 15.0  # keep head level
 LEG_POTENTIAL         = 20.0
 SPEED_POTENTIAL       =  1.0
+STOP_SPEED_POTENTIAL  = 20.0
 
 verbose = 1
 def log(msg):
@@ -582,18 +583,22 @@ class CommandWalker(gym.Env):
         #print(potential_height)
         if potential_height < -0.55: self.game_over = True
 
-        leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
-        leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
-
         speed = 0
         if self.external_command in [+1,-1]:
-            speed = np.abs( self.joints[0].speed / SPEED_HIP - self.joints[2].speed / SPEED_HIP )
+            leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
+            leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
+            speed = SPEED_POTENTIAL*np.abs(self.joints[0].speed/SPEED_HIP - self.joints[2].speed/SPEED_HIP)  # speed is good
+        else:
+            leg0_pot = 0  # stop
+            leg1_pot = 0
+            potential_height *= 2
+            speed = -STOP_SPEED_POTENTIAL*np.abs(self.hull.linearVelocity.x*(VIEWPORT_W/SCALE)/FPS)  # speed is bad
 
         return (
             LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot,
             -HULL_HEIGHT_POTENTIAL*np.abs(potential_height),
             -HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle),
-            SPEED_POTENTIAL*speed
+            speed
             )
 
     def _render(self, mode='human', close=False):
