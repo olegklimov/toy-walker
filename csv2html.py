@@ -19,6 +19,7 @@ function drawBasic() {
       data.addColumn('number', 'ev_tdlam_before')
       data.addColumn('number', 'EpRewMean');
       data.addColumn('number', 'EpLenMean');
+      data.addColumn('number', 'TimeElapsed');
       data.addRows([
 """
 
@@ -31,11 +32,25 @@ html2 = """
           2: {targetAxisIndex: 0},
           3: {targetAxisIndex: 1},
           4: {targetAxisIndex: 1},
+          5: {targetAxisIndex: 2},
         },
         hAxis: {
             viewWindow: {
                 min: 0,
                 max: 8000000
+            }
+        },
+        vAxes: {
+            0: {
+            },
+            1: {
+                minValue: -100,
+                maxValue: 500
+            },
+            2: {
+                gridlines: { count: 0 },
+                minValue: 0,
+                maxValue: 3600
             }
         }
       };
@@ -80,6 +95,7 @@ for fn in need_files:
                     row["ev_tdlam_before"],
                     row["EpRewMean"],
                     row["EpLenMean"],
+                    row["TimeElapsed"],
                     ])
                     ))
         w.write(html2)
