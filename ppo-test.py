@@ -237,6 +237,8 @@ else: # demo
             ts += 1
             if done: break
             env.render("human")
+            if "print_state" in type(env).__dict__:
+                env.print_state(sn)
         print("score=%0.2f length=%i" % (uscore, ts))
         env.monitor.close()
 

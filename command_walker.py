@@ -55,7 +55,7 @@ HULL_POLY =[
     ]
 LEG_DOWN = -8/SCALE
 LEG_W, LEG_H = 8/SCALE, 34/SCALE
-MAX_TARG_STEP = 54/SCALE
+MAX_TARG_STEP = 64/SCALE
 
 VIEWPORT_W = 600
 VIEWPORT_H = 500
@@ -63,15 +63,14 @@ VIEWPORT_H = 500
 TERRAIN_STEP   = 14/SCALE
 TERRAIN_LENGTH = 200     # in steps
 TERRAIN_HEIGHT = VIEWPORT_H/SCALE/4
-TERRAIN_GRASS    = 10    # low long are grass spots, in steps
-TERRAIN_STARTPAD = 10    # in steps
+TERRAIN_GRASS    = 13    # low long are grass spots, in steps
 FRICTION = 2.5
 HULL_HEIGHT_POTENTIAL = 10.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 25.0  # keep head level
-LEG_POTENTIAL         = 20.0
+LEG_POTENTIAL         = 25.0
 SPEED_POTENTIAL       =  1.0
-STOP_SPEED_POTENTIAL  = 20.0
-REWARD_CRASH          = -1000.0
+STOP_SPEED_POTENTIAL  = 10.0
+REWARD_CRASH          = -10.0
 REWARD_STOP_PER_FRAME = 1.0
 
 verbose = 1
@@ -86,8 +85,8 @@ def leg_targeting_potential(x, y):
     https://academo.org/demos/3d-surface-plotter/?expression=(exp(-x%5E2)-0.5)%2F(1%2By)%2B0.02*(x-abs(x))&xRange=-5%2C%2B5&yRange=0%2C%2B10&resolution=100
     '''
     y = max(0,y)
-    scale = 1/(0.4*MAX_TARG_STEP)
-    return (np.exp(-(x*scale)**2)-0.5) / (1+y*scale) - 0.25*scale*abs(x)
+    scale = 1/(0.3*MAX_TARG_STEP)
+    return (np.exp(-(x*scale)**2)-0.5) / (1+y*scale) - 0.15*scale*abs(x)
 
 class ContactDetector(contactListener):
     def __init__(self, env):
@@ -131,7 +130,7 @@ class CommandWalker(gym.Env):
         self.prev_shaping = None
         self._reset()
 
-        high = np.array([np.inf]*29)
+        high = np.array([np.inf]*39)
         self.action_space = spaces.Box(np.array([-1,-1,-1,-1]), np.array([+1,+1,+1,+1]))
         self.observation_space = spaces.Box(-high, high)
 
@@ -158,19 +157,25 @@ class CommandWalker(gym.Env):
         state    = GRASS
         velocity = 0.0
         y        = TERRAIN_HEIGHT
-        counter  = TERRAIN_STARTPAD
+        startpad = 0
+        counter  = 1
         oneshot  = False
         self.terrain   = []
         self.terrain_x = []
         self.terrain_y = []
+        self.init_x_good = 65535
         for i in range(TERRAIN_LENGTH):
             x = i*TERRAIN_STEP
             self.terrain_x.append(x)
 
             if state==GRASS and not oneshot:
                 velocity = 0.8*velocity + 0.01*np.sign(TERRAIN_HEIGHT - y)
-                if i > TERRAIN_STARTPAD: velocity += 2*self.np_random.uniform(-1, 1)/SCALE
+                velocity += 2*self.np_random.uniform(-1, 1)/SCALE
                 y += velocity
+                if counter==startpad and self.init_x_good > np.abs(i - TERRAIN_LENGTH//2):
+                    self.init_x_good = np.abs(i - TERRAIN_LENGTH//2)
+                    self.init_x = x
+                    self.init_y = y
 
             elif state==PIT and oneshot:
                 counter = self.np_random.randint(3, 5)
@@ -254,6 +259,7 @@ class CommandWalker(gym.Env):
                     oneshot = True
                 else:
                     state = GRASS
+                    startpad = counter//2
                     oneshot = True
 
         self.terrain_poly = []
@@ -314,8 +320,8 @@ class CommandWalker(gym.Env):
         self._generate_terrain(self.hardcore)
         self._generate_clouds()
 
-        init_x = TERRAIN_STEP*TERRAIN_STARTPAD/2
-        init_y = TERRAIN_HEIGHT+2.1*LEG_H
+        init_x = self.init_x
+        init_y = self.init_y + 2.1*LEG_H
         self.hull = self.world.CreateDynamicBody(
             position = (init_x, init_y),
             fixtures = fixtureDef(
@@ -393,7 +399,7 @@ class CommandWalker(gym.Env):
         self.leg_parts.reverse()
         self.drawlist = self.terrain + self.leg_parts + [self.hull]
 
-        self.lidar = [LidarCallback() for _ in range(10)]
+        self.lidar = [LidarCallback() for _ in range(20)]
 
         self.target = np.zeros( (2,) )
         self.hill_x = np.zeros( (2,) )
@@ -468,12 +474,12 @@ class CommandWalker(gym.Env):
         pos = self.hull.position
         vel = self.hull.linearVelocity
 
-        for i in range(10):
+        for i in range(20):
             self.lidar[i].fraction = 1.0
             self.lidar[i].p1 = pos
             self.lidar[i].p2 = (
-                pos[0] + math.sin(1.5*i/10.0)*LIDAR_RANGE,
-                pos[1] - math.cos(1.5*i/10.0)*LIDAR_RANGE)
+                pos[0] + math.sin(1.5*(i-9.5)/10.0)*LIDAR_RANGE,
+                pos[1] - math.cos(1.5*(i-9.5)/10.0)*LIDAR_RANGE)
             self.world.RayCast(self.lidar[i], self.lidar[i].p1, self.lidar[i].p2)
 
         state = [
@@ -498,7 +504,7 @@ class CommandWalker(gym.Env):
             0,  # jump
             ]
         state += [l.fraction for l in self.lidar]
-        assert len(state)==29
+        assert len(state)==39
 
         self.scroll = pos.x - VIEWPORT_W/SCALE/2
 
@@ -526,10 +532,11 @@ class CommandWalker(gym.Env):
         if self.external_command in [-1,+1]: allow_random_command = 0.01 if self.steps_done >= 2 else 0.0
         if self.np_random.rand() < allow_random_command:
             while 1:
-                new_command = self.np_random.randint(low=0, high=+2)
+                new_command = self.np_random.randint(low=-1, high=+2)
                 if self.external_command==new_command: continue
                 break
             if new_command in [+1,+2]: a = (1 if targ[1] < targ[0] else 0)  # back leg active
+            if new_command in [-1,-2]: a = (1 if targ[1] > targ[0] else 0)
             if new_command in [0]: targ[0] = targ[1] = 0
             #hill[0],hill[1] = targ[0],targ[1] = legs[0].tip_x,legs[1].tip_x
             log("COMMAND %+i -> %+i, active=%i" % (self.external_command, new_command, a))
@@ -537,7 +544,7 @@ class CommandWalker(gym.Env):
             reset_potential = True
 
         if targ[0]==0 and targ[1]==0: # initial
-            diff = MAX_TARG_STEP*self.np_random.uniform(0.2, 0.5)
+            diff = MAX_TARG_STEP*self.np_random.uniform(0.3, 0.5)
             targ[0] = self.hull.position[0] - diff
             targ[1] = self.hull.position[0] + diff
             if self.np_random.rand() > 0.5: targ[0], targ[1] = targ[1], targ[0]
@@ -557,9 +564,9 @@ class CommandWalker(gym.Env):
             if targ[a] < hill[1-a]:  # here from STOP command (targ[a] was on left, hill[1-a] stays the same to compare correctly)
                 log("DETECTED +1 FROM STOP")
                 hill[1-a] = legs[1-a].tip_x
-                targ[a]   = legs[1-a].tip_x + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+                targ[a]   = legs[1-a].tip_x + MAX_TARG_STEP*self.np_random.uniform(0.3, 1)
                 hill[a]   = targ[a]
-                targ[1-a] = targ[a] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+                targ[1-a] = targ[a] + MAX_TARG_STEP*self.np_random.uniform(0.3, 1)
                 reset_potential = True
             if legs[a].ground_contact and legs[a].tip_x > legs[1-a].tip_x: # step made
                 self.steps_done += 1
@@ -568,6 +575,26 @@ class CommandWalker(gym.Env):
                 targ[1-a] = np.clip(targ[1-a], legs[a].tip_x + 0.2*MAX_TARG_STEP, legs[a].tip_x + MAX_TARG_STEP) # long-visible target becomes gravity well
                 hill[1-a] = targ[1-a]
                 targ[a]   = targ[1-a] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+                a = 1-a
+                reset_potential = True
+            allow_random_command = 0.01
+
+        elif self.external_command==-1:
+            assert(targ[a] > targ[1-a])
+            if targ[a] > hill[1-a]:
+                log("DETECTED -1 FROM STOP")
+                hill[1-a] = legs[1-a].tip_x
+                targ[a]   = legs[1-a].tip_x - MAX_TARG_STEP*self.np_random.uniform(0.3, 1)
+                hill[a]   = targ[a]
+                targ[1-a] = targ[a] - MAX_TARG_STEP*self.np_random.uniform(0.3, 1)
+                reset_potential = True
+            if legs[a].ground_contact and legs[a].tip_x < legs[1-a].tip_x:
+                self.steps_done += 1
+                log("STEP -1 SWITCH LEGS")
+                hill[a]   = legs[a].tip_x
+                targ[1-a] = np.clip(targ[1-a], legs[a].tip_x - MAX_TARG_STEP, legs[a].tip_x - 0.2*MAX_TARG_STEP)
+                hill[1-a] = targ[1-a]
+                targ[a]   = targ[1-a] - MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
                 a = 1-a
                 reset_potential = True
             allow_random_command = 0.01
@@ -698,6 +725,13 @@ class CommandWalker(gym.Env):
             ) for h in range(len(self.reward_history))], color=(1,0,0), linewidth=2)
 
         return self.viewer.render(return_rgb_array = mode=='rgb_array')
+
+    def print_state(self, s):
+        if not verbose: return
+        log("hull " + str(["{:+0.2f}".format(x) for x in s[0:4] ]))
+        log("leg0 " + str(["{:+0.2f}".format(x) for x in s[4:9] ]))
+        log("leg1 " + str(["{:+0.2f}".format(x) for x in s[9:14]]))
+        log("targ " + str(["{:+0.2f}".format(x) for x in s[14:16]]) + " height %0.2f jump %0.2f" % (s[17], s[18]))
 
 class CommandWalkerHardcore(CommandWalker):
     hardcore = True
