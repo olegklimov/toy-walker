@@ -67,7 +67,7 @@ TERRAIN_GRASS    = 10    # low long are grass spots, in steps
 TERRAIN_STARTPAD = 10    # in steps
 FRICTION = 2.5
 HULL_HEIGHT_POTENTIAL = 10.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
-HULL_ANGLE_POTENTIAL  = 15.0  # keep head level
+HULL_ANGLE_POTENTIAL  = 25.0  # keep head level
 LEG_POTENTIAL         = 20.0
 SPEED_POTENTIAL       =  1.0
 STOP_SPEED_POTENTIAL  = 20.0
@@ -526,15 +526,16 @@ class CommandWalker(gym.Env):
                 if self.external_command==new_command: continue
                 break
             if new_command in [+1,+2]: a = (1 if targ[1] < targ[0] else 0)  # back leg active
-            if new_command in [0]: hill[0],hill[1] = targ[0],targ[1] = legs[0].tip_x,legs[1].tip_x
+            if new_command in [0]: targ[0] = targ[1] = 0
+            #hill[0],hill[1] = targ[0],targ[1] = legs[0].tip_x,legs[1].tip_x
             log("COMMAND %+i -> %+i, active=%i" % (self.external_command, new_command, a))
             self.external_command = new_command
             reset_potential = True
 
         if targ[0]==0 and targ[1]==0: # initial
-            diff = MAX_TARG_STEP*self.np_random.uniform(0.1, 0.5)
-            targ[1] = self.hull.position[0] + diff
+            diff = MAX_TARG_STEP*self.np_random.uniform(0.2, 0.5)
             targ[0] = self.hull.position[0] - diff
+            targ[1] = self.hull.position[0] + diff
             if self.np_random.rand() > 0.5: targ[0], targ[1] = targ[1], targ[0]
             hill[0] = targ[0]
             hill[1] = targ[1]
@@ -543,6 +544,9 @@ class CommandWalker(gym.Env):
 
         elif self.external_command==0:
             self.steps_done = 0
+            diff = (hill[1] - hill[0]) / 2
+            hill[0] = targ[0] = self.hull.position[0] - diff
+            hill[1] = targ[1] = self.hull.position[0] + diff
 
         elif self.external_command==+1:
             assert(targ[a] < targ[1-a]) # loop invariant for walking
@@ -583,15 +587,12 @@ class CommandWalker(gym.Env):
         #print(potential_height)
         if potential_height < -0.55: self.game_over = True
 
+        leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
+        leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
         speed = 0
         if self.external_command in [+1,-1]:
-            leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
-            leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
             speed = SPEED_POTENTIAL*np.abs(self.joints[0].speed/SPEED_HIP - self.joints[2].speed/SPEED_HIP)  # speed is good
         else:
-            leg0_pot = 0  # stop
-            leg1_pot = 0
-            potential_height *= 2
             speed = -STOP_SPEED_POTENTIAL*np.abs(self.hull.linearVelocity.x*(VIEWPORT_W/SCALE)/FPS)  # speed is bad
 
         return (
