@@ -71,7 +71,7 @@ HULL_ANGLE_POTENTIAL  = 25.0  # keep head level
 LEG_POTENTIAL         = 20.0
 SPEED_POTENTIAL       =  1.0
 STOP_SPEED_POTENTIAL  = 20.0
-REWARD_CRASH          = -10.0
+REWARD_CRASH          = -1000.0
 REWARD_STOP_PER_FRAME = 1.0
 
 verbose = 1
@@ -597,6 +597,8 @@ class CommandWalker(gym.Env):
         if self.external_command in [+1,-1]:
             speed = SPEED_POTENTIAL*np.abs(self.joints[0].speed/SPEED_HIP - self.joints[2].speed/SPEED_HIP)  # speed is good
         else:
+            leg0_pot *= 0.1  # legs less important, stays here only as a tip
+            leg1_pot *= 0.1
             speed = -STOP_SPEED_POTENTIAL*np.abs(self.hull.linearVelocity.x*(VIEWPORT_W/SCALE)/FPS)  # speed is bad
 
         return (

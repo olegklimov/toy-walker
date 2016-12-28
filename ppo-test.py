@@ -114,7 +114,7 @@ if not demo:
         timesteps_per_batch=1024, # horizon
         max_kl=0.03, clip_param=0.2, entcoeff=0.00, # objective
         klcoeff=0.01, adapt_kl=0,
-        optim_epochs=24, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
+        optim_epochs=24, optim_stepsize=1e-4, optim_batchsize=64, linesearch=True, # optimization
         gamma=0.99, lam=0.95, # advantage estimation
         )
 
@@ -226,7 +226,7 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 1
+            stochastic = 0
             a, vpred, *state = pi.act(stochastic, s, *state)
             r = 0
             sn, rplus, done, info = env.step(a)
