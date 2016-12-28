@@ -1,4 +1,4 @@
-import os, sys, subprocess
+import os, sys, subprocess, time
 import numpy as np
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -33,9 +33,15 @@ env_id = "CommandWalker-v0"
 max_timesteps = 8000000
 seed = 1337
 
-demo = len(sys.argv)>2 and sys.argv[2]=="demo"
-load_previous_experiment = None
-if len(sys.argv)>2 and not demo: load_previous_experiment = sys.argv[2]
+if len(sys.argv)>2:
+    demo = sys.argv[2]=="demo"
+    manual = sys.argv[2]=="manual"
+    if not demo and not manual:
+        load_previous_experiment = sys.argv[2]
+else:
+    demo = False
+    manual = False
+    load_previous_experiment = None
 
 
 # ------------------------------- network ----------------------------------
@@ -109,7 +115,7 @@ def policy_fn(name, ob_space, ac_space):
 
 # ------------------------- learn -----------------------------
 
-if not demo:
+if not demo and not manual:
     learn_kwargs = dict(
         timesteps_per_batch=1024, # horizon
         max_kl=0.03, clip_param=0.2, entcoeff=0.00, # objective
@@ -204,6 +210,7 @@ else: # demo
     sess = tf.InteractiveSession(config=config)
 
     env = gym.make(env_id)
+    env.manual = manual
     #env = skip_wrap(env)
     #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
@@ -215,8 +222,22 @@ else: # demo
     tv_list = pi.get_trainable_variables()
     saver = tf.train.Saver(var_list=tv_list)
 
+    human_sets_pause = False
+    from pyglet.window import key as kk
+    def key_press(key, mod):
+        global human_sets_pause, human_wants_restart
+        if key==32: human_sets_pause = not human_sets_pause
+        elif key==0xff0d: human_wants_restart = True
+        if manual and key==kk.LEFT: env.command(-1)
+        if manual and key==kk.RIGHT: env.command(+1)
+        if manual and key==kk.DOWN: env.command(0)
+        human_agent_action = a
+    env.render()
+    env.viewer.window.on_key_press = key_press
+
     #state = pi.get_initial_state()
     while 1:
+        human_wants_restart = False
         saver.restore(sess, 'models/%s' % experiment)
         sn = env.reset()
         ts = 0
@@ -235,10 +256,14 @@ else: # demo
                 done = True
             uscore += r
             ts += 1
-            if done: break
+            if done or human_wants_restart: break
             env.render("human")
             if "print_state" in type(env).__dict__:
                 env.print_state(sn)
+            while human_sets_pause:
+                time.sleep(0.1)
+                env.viewer.window.dispatch_events()
+
         print("score=%0.2f length=%i" % (uscore, ts))
         env.monitor.close()
 

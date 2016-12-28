@@ -68,9 +68,9 @@ FRICTION = 2.5
 HULL_HEIGHT_POTENTIAL = 10.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 25.0  # keep head level
 LEG_POTENTIAL         = 25.0
-SPEED_POTENTIAL       =  1.0
+SPEED_POTENTIAL       =  0.5
 STOP_SPEED_POTENTIAL  = 10.0
-REWARD_CRASH          = -10.0
+REWARD_CRASH          = -1.0
 REWARD_STOP_PER_FRAME = 1.0
 
 verbose = 1
@@ -133,6 +133,8 @@ class CommandWalker(gym.Env):
         high = np.array([np.inf]*39)
         self.action_space = spaces.Box(np.array([-1,-1,-1,-1]), np.array([+1,+1,+1,+1]))
         self.observation_space = spaces.Box(-high, high)
+
+        self.manual = False
 
     def _seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -314,9 +316,6 @@ class CommandWalker(gym.Env):
         self.steps_done = 0
         self.hull_desired_position = 1.50*LEG_H
 
-        W = VIEWPORT_W/SCALE
-        H = VIEWPORT_H/SCALE
-
         self._generate_terrain(self.hardcore)
         self._generate_clouds()
 
@@ -464,9 +463,29 @@ class CommandWalker(gym.Env):
             (potential_legs,reward_legs, potential_height,reward_height, potential_angle,reward_angle, potential_speed,reward_speed))
         #####################################################################################################################################
         reward = reward_legs + reward_height + reward_angle + reward_speed
+
+        #speed_pot = SPEED_POTENTIAL*np.abs(self.joints[0].speed/SPEED_HIP - self.joints[2].speed/SPEED_HIP)  # speed is good
+
+        reward_stop_alive = 0
+        reward_leg_hint = 0
         if self.external_command==0 and self.legs[0].ground_contact and self.legs[1].ground_contact:
-            reward += REWARD_STOP_PER_FRAME
+            reward_stop_alive = REWARD_STOP_PER_FRAME - np.abs(self.hull.linearVelocity.x*SCALE/FPS)
+            log("STOP ALIVE REWARD %0.2f" % reward_stop_alive)
+        elif self.external_command in [-1,+1]:
+            prop_leg = self.legs[1-self.leg_active]
+            prop_dist = prop_leg.tip_x - self.hull.position[0]
+            reward_leg_hint = 0.01*SPEED_POTENTIAL*prop_dist*SCALE*self.hull.linearVelocity.x*SCALE/FPS
+            speed_too_low = np.abs(self.hull.linearVelocity.x*SCALE/FPS)
+            log("speed_too_low %0.3f" % (speed_too_low))
+            if speed_too_low < 0.01:
+                punishment = (speed_too_low - 0.01)*(speed_too_low + 0.01) / (0.01*0.01)
+                log("speed_too_low %0.3f PUNISHMENT %0.2f" % (speed_too_low, punishment))
+                reward_leg_hint = REWARD_STOP_PER_FRAME*punishment
+            log("LEG HINT REWARD %0.2f" % reward_leg_hint)
+
+        reward += reward_stop_alive + reward_leg_hint
         #self.reward_history.append(reward)
+
         self.reward_history.append(self.reward_legs + self.reward_height + self.reward_angle + self.reward_speed)
         if len(self.reward_history) > 100:
             self.reward_history.pop(0)
@@ -485,8 +504,8 @@ class CommandWalker(gym.Env):
         state = [
             self.hull.angle,        # Normal angles up to 0.5 here, but sure more is possible.
             2.0*self.hull.angularVelocity/FPS,
-            0.3*vel.x*(VIEWPORT_W/SCALE)/FPS,  # Normalized to get -1..1 range
-            0.3*vel.y*(VIEWPORT_H/SCALE)/FPS,
+            vel.x*300/SCALE/FPS,  # Normalized to get -1..1 range
+            vel.y*300/SCALE/FPS,
             self.joints[0].angle,   # This will give 1.1 on high up, but it's still OK (and there should be spikes on hiting the ground, that's normal too)
             self.joints[0].speed / SPEED_HIP,
             self.joints[1].angle + 1.0,
@@ -520,28 +539,30 @@ class CommandWalker(gym.Env):
             done   = True
         return np.array(state), reward, done, {}
 
+    def command(self, new_command):
+        if new_command in [+1,+2]: self.leg_active = (1 if self.target[1] < self.target[0] else 0)  # back leg active
+        if new_command in [-1,-2]: self.leg_active = (1 if self.target[1] > self.target[0] else 0)
+        if new_command in [0]: self.target[0] = self.target[1] = 0
+        log("COMMAND %+i -> %+i, active=%i" % (self.external_command, new_command, self.leg_active))
+        self.external_command = new_command
+
     def _set_feet_target(self):
         legs = self.legs
         targ = self.target
         hill = self.hill_x
-        a = self.leg_active
 
         reset_potential = False
         allow_random_command = 0.0
         if self.external_command in [0]:     allow_random_command = 0.05 if legs[0].ground_contact and legs[1].ground_contact else 0.0
         if self.external_command in [-1,+1]: allow_random_command = 0.01 if self.steps_done >= 2 else 0.0
-        if self.np_random.rand() < allow_random_command:
+        if self.np_random.rand() < allow_random_command and not self.manual:
             while 1:
                 new_command = self.np_random.randint(low=-1, high=+2)
                 if self.external_command==new_command: continue
                 break
-            if new_command in [+1,+2]: a = (1 if targ[1] < targ[0] else 0)  # back leg active
-            if new_command in [-1,-2]: a = (1 if targ[1] > targ[0] else 0)
-            if new_command in [0]: targ[0] = targ[1] = 0
-            #hill[0],hill[1] = targ[0],targ[1] = legs[0].tip_x,legs[1].tip_x
-            log("COMMAND %+i -> %+i, active=%i" % (self.external_command, new_command, a))
-            self.external_command = new_command
+            self.command(new_command)
             reset_potential = True
+        a = self.leg_active
 
         if targ[0]==0 and targ[1]==0: # initial
             diff = MAX_TARG_STEP*self.np_random.uniform(0.3, 0.5)
@@ -620,19 +641,17 @@ class CommandWalker(gym.Env):
 
         leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
         leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
-        speed = 0
         if self.external_command in [+1,-1]:
-            speed = SPEED_POTENTIAL*np.abs(self.joints[0].speed/SPEED_HIP - self.joints[2].speed/SPEED_HIP)  # speed is good
+            pass
         else:
-            leg0_pot *= 0.1  # legs less important, stays here only as a tip
+            leg0_pot *= 0.1  # stop: legs less important, stays here only as a tip
             leg1_pot *= 0.1
-            speed = -STOP_SPEED_POTENTIAL*np.abs(self.hull.linearVelocity.x*(VIEWPORT_W/SCALE)/FPS)  # speed is bad
 
         return (
             LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot,
             -HULL_HEIGHT_POTENTIAL*np.abs(potential_height),
             -HULL_ANGLE_POTENTIAL*np.abs(self.hull.angle),
-            speed
+            0.0
             )
 
     def _render(self, mode='human', close=False):
@@ -731,7 +750,7 @@ class CommandWalker(gym.Env):
         log("hull " + str(["{:+0.2f}".format(x) for x in s[0:4] ]))
         log("leg0 " + str(["{:+0.2f}".format(x) for x in s[4:9] ]))
         log("leg1 " + str(["{:+0.2f}".format(x) for x in s[9:14]]))
-        log("targ " + str(["{:+0.2f}".format(x) for x in s[14:16]]) + " height %0.2f jump %0.2f" % (s[17], s[18]))
+        log("targ " + str(["{:+0.2f}".format(x) for x in s[14:16]]) + " command=%0.2f height %0.2f jump %0.2f" % (s[16], s[17], s[18]))
 
 class CommandWalkerHardcore(CommandWalker):
     hardcore = True
