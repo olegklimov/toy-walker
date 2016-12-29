@@ -236,6 +236,7 @@ else: # demo
         if manual and key==kk.DOWN: env.command(0)
         human_agent_action = a
     env.render()
+    #command_walker.verbose = 0
     env.viewer.window.on_key_press = key_press
 
     #state = pi.get_initial_state()
@@ -243,10 +244,11 @@ else: # demo
         human_wants_restart = False
         saver.restore(sess, 'models/%s' % experiment)
         sn = env.reset()
-        ts = 0
+        frame = 0
         r = 0
         uscore = 0
         state = {}
+        ts1 = time.time()
         while 1:
             s = sn
             #a = agent.control(s, rng)
@@ -255,10 +257,10 @@ else: # demo
             r = 0
             sn, rplus, done, info = env.step(a)
             r += rplus
-            if ts > env.spec.timestep_limit:
+            if frame > env.spec.timestep_limit:
                 done = True
             uscore += r
-            ts += 1
+            frame += 1
             if done or human_wants_restart: break
             env.render("human")
             if "print_state" in type(env).__dict__:
@@ -266,7 +268,7 @@ else: # demo
             while human_sets_pause:
                 time.sleep(0.1)
                 env.viewer.window.dispatch_events()
-
-        print("score=%0.2f length=%i" % (uscore, ts))
+        ts2 = time.time()
+        print("score=%0.2f length=%i fps=%0.2f" % (uscore, frame, frame/(ts2-ts1)))
         env.monitor.close()
 
