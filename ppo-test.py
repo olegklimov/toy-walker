@@ -30,7 +30,7 @@ print("experiment_name: '%s'" % experiment)
 #env_id = "LunarLanderContinuous-v2"
 #env_id = "BipedalWalker-v2"
 env_id = "CommandWalker-v0"
-max_timesteps = 8000000
+max_timesteps = 16000000
 seed = 1337
 
 if len(sys.argv)>2:
@@ -87,7 +87,8 @@ def policy_fn(name, ob_space, ac_space):
             if isinstance(ac_space, gym.spaces.Box):
                 mean = U.dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
-                pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
+                #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
+                pdparam = U.concatenate([mean, mean * 0.0 - 0.1 + 0.0*logstd], axis=1)
             else:
                 pdparam = U.dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
             self.pd = pdtype.pdfromflat(pdparam)
@@ -98,10 +99,11 @@ def policy_fn(name, ob_space, ac_space):
 
             stochastic = tf.placeholder(dtype=tf.bool, shape=())
             ac = U.switch(stochastic, self.pd.sample(), self.pd.mode())
-            self._act = U.function([stochastic, ob], [ac, self.vpred])
+            self._act = U.function([stochastic, ob], [ac, self.vpred])  #, logstd
 
         def act(self, stochastic, ob):
             ac1, vpred1 =  self._act(stochastic, ob[None])
+            #print(std)
             return ac1[0], vpred1[0]
         def get_variables(self):
             return tf.get_collection(tf.GraphKeys.VARIABLES, self.scope)
@@ -119,8 +121,9 @@ if not demo and not manual:
     learn_kwargs = dict(
         timesteps_per_batch=1024, # horizon
         max_kl=0.03, clip_param=0.2, entcoeff=0.00, # objective
-        klcoeff=0.01, adapt_kl=0,
-        optim_epochs=24, optim_stepsize=1e-4, optim_batchsize=64, linesearch=True, # optimization
+        #klcoeff=0.01, adapt_kl=0,
+        klcoeff=0.001, adapt_kl=0.03,
+        optim_epochs=24, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
         gamma=0.99, lam=0.95, # advantage estimation
         )
 
@@ -247,7 +250,7 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 0
+            stochastic = 1
             a, vpred, *state = pi.act(stochastic, s, *state)
             r = 0
             sn, rplus, done, info = env.step(a)
