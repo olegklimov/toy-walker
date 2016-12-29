@@ -47,7 +47,7 @@ SPEED_HIP     = 4
 SPEED_KNEE    = 6
 LIDAR_RANGE   = 160/SCALE
 
-INITIAL_RANDOM = 30*SCALE
+INITIAL_RANDOM = 10*SCALE
 
 HULL_POLY =[
     (-30,+9), (+6,+9), (+34,+1),
@@ -69,7 +69,7 @@ HULL_HEIGHT_POTENTIAL = 10.0  # standing straight .. legs maximum to the sides =
 HULL_ANGLE_POTENTIAL  = 25.0  # keep head level
 LEG_POTENTIAL         = 10.0
 SPEED_POTENTIAL       =  0.5
-REWARD_CRASH          = -20.0
+REWARD_CRASH          = -10.0
 REWARD_STOP_PER_FRAME = 1.0
 
 verbose = 1
@@ -558,7 +558,7 @@ class CommandWalker(gym.Env):
         if self.external_command in [-1,+1]: allow_random_command = 0.01 if self.steps_done >= 2 else 0.0
         if self.np_random.rand() < allow_random_command and not self.manual:
             while 1:
-                new_command = self.np_random.randint(low=0, high=+2)
+                new_command = self.np_random.randint(low=-1, high=+2)
                 if self.external_command==new_command: continue
                 break
             self.command(new_command)
