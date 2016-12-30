@@ -619,17 +619,17 @@ class CommandWalker(gym.Env):
             if targ[a] < hill[1-a]:  # here from STOP command (targ[a] was on left, hill[1-a] stays the same to compare correctly)
                 log("DETECTED +1 FROM STOP")
                 hill[1-a] = legs[1-a].tip_x
-                targ[a]   = legs[1-a].tip_x + MAX_TARG_STEP*self.np_random.uniform(0.3, 1)
+                targ[a]   = legs[1-a].tip_x + MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 hill[a]   = targ[a]
-                targ[1-a] = targ[a] + MAX_TARG_STEP*self.np_random.uniform(0.3, 1)
+                targ[1-a] = targ[a] + MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 reset_potential = True
             if legs[a].ground_contact and legs[a].tip_x > legs[1-a].tip_x: # step made
                 self.steps_done += 1
                 log("STEP +1 SWITCH LEGS")
                 hill[a]   = legs[a].tip_x # de-facto leg placement, turn into potential well
-                targ[1-a] = np.clip(targ[1-a], legs[a].tip_x + 0.2*MAX_TARG_STEP, legs[a].tip_x + MAX_TARG_STEP) # long-visible target becomes gravity well
+                targ[1-a] = np.clip(targ[1-a], legs[a].tip_x + 0.5*MAX_TARG_STEP, legs[a].tip_x + MAX_TARG_STEP) # long-visible target becomes gravity well
                 hill[1-a] = targ[1-a]
-                targ[a]   = targ[1-a] + MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+                targ[a]   = targ[1-a] + MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 a = 1-a
                 reset_potential = True
             allow_random_command = 0.01
@@ -639,17 +639,17 @@ class CommandWalker(gym.Env):
             if targ[a] > hill[1-a]:
                 log("DETECTED -1 FROM STOP")
                 hill[1-a] = legs[1-a].tip_x
-                targ[a]   = legs[1-a].tip_x - MAX_TARG_STEP*self.np_random.uniform(0.3, 1)
+                targ[a]   = legs[1-a].tip_x - MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 hill[a]   = targ[a]
-                targ[1-a] = targ[a] - MAX_TARG_STEP*self.np_random.uniform(0.3, 1)
+                targ[1-a] = targ[a] - MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 reset_potential = True
             if legs[a].ground_contact and legs[a].tip_x < legs[1-a].tip_x:
                 self.steps_done += 1
                 log("STEP -1 SWITCH LEGS")
                 hill[a]   = legs[a].tip_x
-                targ[1-a] = np.clip(targ[1-a], legs[a].tip_x - MAX_TARG_STEP, legs[a].tip_x - 0.2*MAX_TARG_STEP)
+                targ[1-a] = np.clip(targ[1-a], legs[a].tip_x - MAX_TARG_STEP, legs[a].tip_x - 0.5*MAX_TARG_STEP)
                 hill[1-a] = targ[1-a]
-                targ[a]   = targ[1-a] - MAX_TARG_STEP*self.np_random.uniform(0.2, 1)
+                targ[a]   = targ[1-a] - MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 a = 1-a
                 reset_potential = True
             allow_random_command = 0.01

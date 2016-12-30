@@ -47,7 +47,7 @@ else:
 # ------------------------------- network ----------------------------------
 
 policy_kwargs = dict(
-    hid_size=196,
+    hid_size=120,
     num_hid_layers=2
     )
 
