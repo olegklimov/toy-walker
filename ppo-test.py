@@ -212,6 +212,10 @@ else: # demo
     config.gpu_options.per_process_gpu_memory_fraction = 0.1
     sess = tf.InteractiveSession(config=config)
 
+    #command_walker.verbose = 0
+    command_walker.VIEWPORT_W = 1920
+    command_walker.VIEWPORT_H = 1000
+
     env = gym.make(env_id)
     env.manual = manual
     #env = skip_wrap(env)
@@ -227,17 +231,22 @@ else: # demo
 
     human_sets_pause = False
     from pyglet.window import key as kk
-    def key_press(key, mod):
+    keys = {}
+    def key_event(pressed, key, mod):
+        keys[key] = +1 if pressed else 0
         global human_sets_pause, human_wants_restart
-        if key==32: human_sets_pause = not human_sets_pause
-        elif key==0xff0d: human_wants_restart = True
-        if manual and key==kk.LEFT: env.command(-1)
-        if manual and key==kk.RIGHT: env.command(+1)
-        if manual and key==kk.DOWN: env.command(0)
-        human_agent_action = a
+        if pressed and key==kk.SPACE: human_sets_pause = not human_sets_pause
+        if pressed and key==0xff0d: human_wants_restart = True
+        command = keys.get(kk.RIGHT, 0) - keys.get(kk.LEFT, 0)
+        env.command(command)
+        env.manual_jump = keys.get(kk.LSHIFT, 0)
+        env.manual_height = keys.get(kk.UP, 0) - keys.get(kk.DOWN, 0)
+        #print("(%x key=%x)" % (mod, key))
+    def key_press(key, mod): key_event(True, key, mod)
+    def key_release(key, mod): key_event(False, key, mod)
     env.render()
-    #command_walker.verbose = 0
     env.viewer.window.on_key_press = key_press
+    env.viewer.window.on_key_release = key_release
 
     #state = pi.get_initial_state()
     while 1:

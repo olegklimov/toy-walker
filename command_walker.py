@@ -57,15 +57,15 @@ LEG_DOWN = -8/SCALE
 LEG_W, LEG_H = 8/SCALE, 34/SCALE
 MAX_TARG_STEP = 64/SCALE
 
-VIEWPORT_W = 600
-VIEWPORT_H = 500
+VIEWPORT_W = 800
+VIEWPORT_H = 600
 
 TERRAIN_STEP   = 14/SCALE
 TERRAIN_LENGTH = 200     # in steps
 TERRAIN_HEIGHT = VIEWPORT_H/SCALE/4
 TERRAIN_GRASS    = 13    # low long are grass spots, in steps
 FRICTION = 2.5
-HULL_HEIGHT_POTENTIAL = 10.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
+HULL_HEIGHT_POTENTIAL = 15.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 25.0  # keep head level
 LEG_POTENTIAL         = 10.0
 SPEED_POTENTIAL       =  0.5
@@ -121,6 +121,8 @@ class CommandWalker(gym.Env):
     def __init__(self):
         self._seed()
         self.viewer = None
+        self.manual = False
+        self.manual_height = 0
 
         self.world = Box2D.b2World()
         self.terrain = None
@@ -132,8 +134,6 @@ class CommandWalker(gym.Env):
         high = np.array([np.inf]*39)
         self.action_space = spaces.Box(np.array([-1,-1,-1,-1]), np.array([+1,+1,+1,+1]))
         self.observation_space = spaces.Box(-high, high)
-
-        self.manual = False
 
     def _seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -154,7 +154,7 @@ class CommandWalker(gym.Env):
         self.joints = []
 
     def _generate_terrain(self, hardcore):
-        GRASS, STUMP, STAIRS, PIT, _STATES_ = range(5)
+        GRASS, STAIRS, STUMP, PIT, _STATES_ = range(5)
         state    = GRASS
         velocity = 0.0
         y        = TERRAIN_HEIGHT
@@ -256,7 +256,10 @@ class CommandWalker(gym.Env):
             if counter==0:
                 counter = self.np_random.randint(TERRAIN_GRASS/2, TERRAIN_GRASS)
                 if state==GRASS and hardcore:
-                    state = self.np_random.randint(1, _STATES_)
+                    state = self.np_random.randint(GRASS+1, _STATES_)
+                    oneshot = True
+                elif state==GRASS and not hardcore:
+                    state = self.np_random.randint(GRASS, STAIRS+1)  # grass or stairs
                     oneshot = True
                 else:
                     state = GRASS
@@ -313,7 +316,7 @@ class CommandWalker(gym.Env):
         self.reward_history = []
         self.external_command = 0
         self.steps_done = 0
-        self.hull_desired_position = 1.50*LEG_H
+        self.hull_desired_position = self.np_random.uniform(low=-1, high=+1)
 
         self._generate_terrain(self.hardcore)
         self._generate_clouds()
@@ -360,8 +363,8 @@ class CommandWalker(gym.Env):
                 enableLimit=True,
                 maxMotorTorque=MOTORS_TORQUE,
                 motorSpeed = i,
-                lowerAngle = -0.8,
-                upperAngle = 1.1,
+                lowerAngle = -0.9,
+                upperAngle = 1.2,
                 )
             self.leg_parts.append(leg)
             self.joints.append(self.world.CreateJoint(rjd))
@@ -387,7 +390,7 @@ class CommandWalker(gym.Env):
                 enableLimit=True,
                 maxMotorTorque=MOTORS_TORQUE,
                 motorSpeed = 1,
-                lowerAngle = -1.6,
+                lowerAngle = -1.9,
                 upperAngle = -0.1,
                 )
             lower.ground_contact = 0
@@ -440,8 +443,8 @@ class CommandWalker(gym.Env):
         for leg in self.legs:
             leg.tip_x = leg.position[0] + np.sin(leg.angle) * 0.5*LEG_H
             leg.tip_y = leg.position[1] - np.cos(leg.angle) * 0.5*LEG_H
+        if self.manual: self.hull_desired_position = self.manual_height
 
-        #if was_leg0_contact==False and self.legs[0].ground_contact > 0 or was_leg1_contact==False and self.legs[1].ground_contact > 0:
         self._set_feet_target()
 
         potential_legs, potential_height, potential_angle, potential_speed = self._potentials()
@@ -473,7 +476,7 @@ class CommandWalker(gym.Env):
             prop_leg = self.legs[1-self.leg_active]
             prop_dist = prop_leg.tip_x - self.hull.position[0]
             if prop_dist*self.external_command > 0 and prop_leg.ground_contact:
-                reward_leg_hint = 0.02*SPEED_POTENTIAL*SCALE*self.external_command*self.hull.linearVelocity.x*SCALE/FPS
+                reward_leg_hint = 0.2*SPEED_POTENTIAL*SCALE*self.external_command*self.hull.linearVelocity.x*SCALE/FPS
             else:
                 reward_leg_hint = 0
 #            speed_too_low = np.abs(self.hull.linearVelocity.x*SCALE/FPS)
@@ -520,7 +523,7 @@ class CommandWalker(gym.Env):
             (self.target[0] - self.hull.position[0]) / MAX_TARG_STEP,
             (self.target[1] - self.hull.position[0]) / MAX_TARG_STEP,
             self.external_command,
-            0,  # self.hull_desired_position,
+            self.hull_desired_position,
             0,  # jump
             ]
         state += [l.fraction for l in self.lidar]
@@ -541,6 +544,7 @@ class CommandWalker(gym.Env):
         return np.array(state), reward, done, {}
 
     def command(self, new_command):
+        if self.external_command==new_command: return
         if new_command in [+1,+2]: self.leg_active = (1 if self.target[1] < self.target[0] else 0)  # back leg active
         if new_command in [-1,-2]: self.leg_active = (1 if self.target[1] > self.target[0] else 0)
         if new_command in [0]: self.target[0] = self.target[1] = 0
@@ -634,11 +638,16 @@ class CommandWalker(gym.Env):
         self.leg_active = a
 
     def _potentials(self):
-        self.hull_above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
-        potential_height =  (self.hull_above_legs - self.hull_desired_position) / LEG_H
-        #self.hull_desired_position = 1.50*LEG_H
-        #print(potential_height)
-        if potential_height < -0.55: self.game_over = True
+        legs_level = min(self.legs[0].position[1], self.legs[1].position[1])
+        above1 = 1.30  # for hull_desired_position==-1
+        above2 = 1.75  # for hull_desired_position==+1
+        above = above1 + (above2-above1)*((self.hull_desired_position+1)/2)
+        self.hull_above_legs_shouldbe = legs_level + above*LEG_H
+        potential_height = (self.hull.position[1] - self.hull_above_legs_shouldbe) / LEG_H
+        sanity = (self.hull.position[1] - legs_level) / LEG_H
+        print(sanity)
+        #log("potential_height", potential_height, "above", above)
+        if (self.hull.position[1] - legs_level) / LEG_H < 1.15: self.game_over = True
 
         leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
         leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
@@ -690,9 +699,8 @@ class CommandWalker(gym.Env):
             l = self.lidar[i] if i < len(self.lidar) else self.lidar[len(self.lidar)-i-1]
             self.viewer.draw_polyline( [l.p1, l.p2], color=(1,0,0), linewidth=1 )
 
-        # self.hull_above_legs = self.hull.position[1] - 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
         x = self.hull.position[0]
-        y = self.hull_desired_position + 0.5*(self.legs[0].position[1] + self.legs[1].position[1])
+        y = self.hull_above_legs_shouldbe
         self.viewer.draw_polyline( [(x+dx,y) for dx in [-2*MAX_TARG_STEP,+2*MAX_TARG_STEP]], color=(0.8,0.8,0.8), linewidth=1 )
 
         for obj in self.drawlist:
