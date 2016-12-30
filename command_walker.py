@@ -48,7 +48,7 @@ SPEED_HIP     = 8
 SPEED_KNEE    = 12
 LIDAR_RANGE   = 160/SCALE
 
-INITIAL_RANDOM = 10*SCALE
+INITIAL_RANDOM = 9000/SCALE
 
 HULL_POLY =[
     (-30,+9), (+6,+9), (+34,+1),
@@ -68,10 +68,9 @@ TERRAIN_GRASS    = 13    # low long are grass spots, in steps
 FRICTION = 2.5
 HULL_HEIGHT_POTENTIAL = 5.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 5.0  # keep head level
-LEG_POTENTIAL         = 1.0
-SPEED_HINT            =  0.005
-REWARD_CRASH          = -10.0
-REWARD_STOP_PER_FRAME = 1.0
+LEG_POTENTIAL         = 2.0
+SPEED_HINT            = 0.005
+REWARD_CRASH          = -5.0
 
 verbose = 1
 def log(msg):
@@ -461,7 +460,7 @@ class CommandWalker(gym.Env):
             self.joints[3].motorSpeed     = float(SPEED_KNEE    * np.sign(action[3]))
             self.joints[3].maxMotorTorque = float(MOTORS_TORQUE * np.clip(np.abs(action[3]), 0, 1))
 
-        self.world.Step(1.0/FPS, 6*30, 2*30)
+        self.world.Step(1.5/FPS, 6*30, 2*30)
         self.ts += 1
 
         for leg in self.legs:
@@ -486,7 +485,6 @@ class CommandWalker(gym.Env):
         reward_leg_hint = 0
         if self.external_command==0:
             if self.legs[0].ground_contact and self.legs[1].ground_contact:
-                #reward_stop_alive = REWARD_STOP_PER_FRAME - np.abs(self.hull.linearVelocity.x*SCALE/FPS)
                 potential_height = max(0, potential_height-np.abs(self.hull.linearVelocity.x*SCALE/FPS))
             else:
                 potential_height = 0
@@ -667,15 +665,15 @@ class CommandWalker(gym.Env):
         self.leg_active = a
 
     def _potentials(self):
-        self.legs_level = min(self.legs[0].position[1], self.legs[1].position[1])
-        above1 = 1.30  # for hull_desired_position==-1
-        above2 = 1.75  # for hull_desired_position==+1
+        self.legs_level = min(self.legs[0].tip_y, self.legs[1].tip_y)
+        above1 = 1.40  # for hull_desired_position==-1
+        above2 = 2.15  # for hull_desired_position==+1
         above = above1 + (above2-above1)*((self.hull_desired_position+1)/2)
         self.hull_above_legs_shouldbe = self.legs_level + above*LEG_H
         potential_height = (self.hull.position[1] - self.hull_above_legs_shouldbe) / LEG_H
         self.hull_dangerous_level = (self.hull.position[1] - self.legs_level) / LEG_H
         #log("potential_height", potential_height, "above", above)
-        if self.hull_dangerous_level < 1.15: self.game_over = True
+        if self.hull_dangerous_level < 1.25: self.game_over = True
 
         leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
         leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
