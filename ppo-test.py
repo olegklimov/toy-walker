@@ -47,7 +47,7 @@ else:
 # ------------------------------- network ----------------------------------
 
 policy_kwargs = dict(
-    hid_size=120,
+    hid_size=196,
     num_hid_layers=2
     )
 
@@ -261,7 +261,7 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 0
+            stochastic = 1
             a, vpred, *state = pi.act(stochastic, s, *state)
             r = 0
             sn, rplus, done, info = env.step(a)
@@ -272,8 +272,8 @@ else: # demo
             frame += 1
             if done or human_wants_restart: break
             env.render("human")
-            if "print_state" in type(env).__dict__:
-                env.print_state(sn)
+            #if "print_state" in type(env).__dict__:
+            #    env.print_state(sn)
             while human_sets_pause:
                 time.sleep(0.1)
                 env.viewer.window.dispatch_events()
