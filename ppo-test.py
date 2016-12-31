@@ -261,7 +261,7 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 1
+            stochastic = 0
             a, vpred, *state = pi.act(stochastic, s, *state)
             r = 0
             sn, rplus, done, info = env.step(a)
