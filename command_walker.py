@@ -66,7 +66,7 @@ TERRAIN_LENGTH = 200     # in steps
 TERRAIN_HEIGHT = VIEWPORT_H/SCALE/4
 TERRAIN_GRASS    = 13    # low long are grass spots, in steps
 FRICTION = 2.5
-HULL_HEIGHT_POTENTIAL = 5.0  # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
+HULL_HEIGHT_POTENTIAL = 25.0 # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 5.0  # keep head level
 LEG_POTENTIAL         = 2.0
 SPEED_HINT            = 0.005
@@ -499,10 +499,10 @@ class CommandWalker(gym.Env):
             #log("LEG HINT REWARD %0.2f" % reward_leg_hint)
 
         reward_jump = 0
-        #if self.jump > 0:
-        #    self.jump -= 1
-        #    reward_jump = SPEED_HINT*SCALE*max(0, self.hull.linearVelocity.y)*SCALE/FPS
-        #    log("JUMP REWARD %0.2f" % reward_jump)
+        if self.jump > 0:
+            self.jump -= 1
+            reward_jump = SPEED_HINT*SCALE*20*max(0, self.hull.linearVelocity.y)*SCALE/FPS
+            log("JUMP REWARD %0.2f" % reward_jump)
 
         reward  = reward_legs + reward_height + reward_angle
         reward += LEAK*potential_height + LEAK*potential_angle
@@ -594,7 +594,7 @@ class CommandWalker(gym.Env):
         a = self.leg_active
         if (self.np_random.rand() < allow_jump and not self.manual) or self.manual_jump==1:
             self.manual_jump = 0
-            self.jump = 10
+            self.jump = 15
 
         if targ[0]==0 and targ[1]==0: # initial
             diff = MAX_TARG_STEP*self.np_random.uniform(0.3, 0.5)
