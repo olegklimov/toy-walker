@@ -89,6 +89,8 @@ def policy_fn(name, ob_space, ac_space):
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
                 pdparam = U.concatenate([mean, mean * 0.0 - 0.5 + 0.0*logstd], axis=1)
+                # -0.5 => 0.6
+                # -1.6 => 0.2
             else:
                 pdparam = U.dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
             self.pd = pdtype.pdfromflat(pdparam)
@@ -213,8 +215,8 @@ else: # demo
     sess = tf.InteractiveSession(config=config)
 
     #command_walker.verbose = 0
-    command_walker.VIEWPORT_W = 1920
-    command_walker.VIEWPORT_H = 1000
+    command_walker.VIEWPORT_W = 1000
+    command_walker.VIEWPORT_H = 800
 
     env = gym.make(env_id)
     env.manual = manual
@@ -244,6 +246,7 @@ else: # demo
         #print("(%x key=%x)" % (mod, key))
     def key_press(key, mod): key_event(True, key, mod)
     def key_release(key, mod): key_event(False, key, mod)
+    env.draw_less = False
     env.render()
     env.viewer.window.on_key_press = key_press
     env.viewer.window.on_key_release = key_release
@@ -261,13 +264,13 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 0
+            stochastic = 1
             a, vpred, *state = pi.act(stochastic, s, *state)
             r = 0
             sn, rplus, done, info = env.step(a)
             r += rplus
-            if frame > env.spec.timestep_limit:
-                done = True
+            #if frame > env.spec.timestep_limit:
+            #    done = True
             uscore += r
             frame += 1
             if done or human_wants_restart: break

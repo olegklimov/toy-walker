@@ -465,7 +465,7 @@ class CommandWalker(gym.Env):
             self.joints[3].motorSpeed     = float(SPEED_KNEE    * np.sign(action[3]))
             self.joints[3].maxMotorTorque = float(MOTORS_TORQUE * np.clip(np.abs(action[3]), 0, 1))
 
-        self.world.Step(1.5/FPS, 6*30, 2*30)
+        self.world.Step(2.0/FPS, 6*30, 2*30)
         self.ts += 1
 
         for leg in self.legs:
@@ -594,7 +594,7 @@ class CommandWalker(gym.Env):
         allow_jump = 0.0
         if self.np_random.rand() < allow_change_command and not self.manual:
             while 1:
-                new_command = self.np_random.randint(low=0, high=+2)
+                new_command = self.np_random.randint(low=-1, high=+2)
                 if self.external_command==new_command: continue
                 break
             self.command(new_command)
@@ -733,13 +733,14 @@ class CommandWalker(gym.Env):
             l = self.lidar[i] if i < len(self.lidar) else self.lidar[len(self.lidar)-i-1]
             self.viewer.draw_polyline( [l.p1, l.p2], color=(1,0,0), linewidth=1 )
 
-        color = (0.8,0.8,0.8)
-        if self.hull_dangerous_level < 1.20: color = (1,0,0)
-        x = self.hull.position[0]
-        y = self.hull_above_legs_shouldbe
-        self.viewer.draw_polyline( [(x+dx,y) for dx in [-2*MAX_TARG_STEP,+2*MAX_TARG_STEP]], color=color, linewidth=1 )
-        y = self.legs_level
-        self.viewer.draw_polyline( [(x+dx,y) for dx in [-2*MAX_TARG_STEP,+2*MAX_TARG_STEP]], color=color, linewidth=1 )
+        if not self.draw_less:
+            color = (0.8,0.8,0.8)
+            if self.hull_dangerous_level < 1.20: color = (1,0,0)
+            x = self.hull.position[0]
+            y = self.hull_above_legs_shouldbe
+            self.viewer.draw_polyline( [(x+dx,y) for dx in [-2*MAX_TARG_STEP,+2*MAX_TARG_STEP]], color=color, linewidth=1 )
+            y = self.legs_level
+            self.viewer.draw_polyline( [(x+dx,y) for dx in [-2*MAX_TARG_STEP,+2*MAX_TARG_STEP]], color=color, linewidth=1 )
 
         for obj in self.drawlist:
             for f in obj.fixtures:
@@ -762,36 +763,38 @@ class CommandWalker(gym.Env):
         self.viewer.draw_polygon(f, color=(0.9,0.2,0) )
         self.viewer.draw_polyline(f + [f[0]], color=(0,0,0), linewidth=2 )
 
-        for leg in self.legs:
-            if leg.ground_contact > 0:
-                t = rendering.Transform(translation=(leg.tip_x,leg.tip_y))
-                color = (0,0,1)
-                self.viewer.draw_circle(4/SCALE, 10, color=color).add_attr(t)
-            if leg==self.legs[self.leg_active]:
-                t = rendering.Transform(translation=leg.position)
-                self.viewer.draw_circle(2/SCALE, 10, color=(1,0,0)).add_attr(t)
+        if not self.draw_less:
+            for leg in self.legs:
+                if leg.ground_contact > 0:
+                    t = rendering.Transform(translation=(leg.tip_x,leg.tip_y))
+                    color = (0,0,1)
+                    self.viewer.draw_circle(4/SCALE, 10, color=color).add_attr(t)
+                if leg==self.legs[self.leg_active]:
+                    t = rendering.Transform(translation=leg.position)
+                    self.viewer.draw_circle(2/SCALE, 10, color=(1,0,0)).add_attr(t)
 
-        for i in [0,1]:
-            hill_x = self.hill_x[i]
-            target_x = self.target[i]
-            hill_y = self.hill_y[i]
-            color = self.legs[i].color1
-            self.viewer.draw_polyline( [(
-                hill_x + dx,
-                hill_y + 0.5*leg_targeting_potential(dx, 0),
-                ) for dx in np.arange(-2*MAX_TARG_STEP,+2*MAX_TARG_STEP,MAX_TARG_STEP/15)], color=color, linewidth=1)
-            self.viewer.draw_polyline( [(
-                hill_x + dx,
-                hill_y + 0.5*leg_targeting_potential(dx, 1) + 1/SCALE,
-                ) for dx in np.arange(-2*MAX_TARG_STEP,+2*MAX_TARG_STEP,MAX_TARG_STEP/15)], color=color, linewidth=1)
-            t = rendering.Transform(translation=(target_x, hill_y))
-            self.viewer.draw_circle(5/SCALE, 10, color=color).add_attr(t)
+            for i in [0,1]:
+                hill_x = self.hill_x[i]
+                target_x = self.target[i]
+                hill_y = self.hill_y[i]
+                color = self.legs[i].color1
+                self.viewer.draw_polyline( [(
+                    hill_x + dx,
+                    hill_y + 0.5*leg_targeting_potential(dx, 0),
+                    ) for dx in np.arange(-2*MAX_TARG_STEP,+2*MAX_TARG_STEP,MAX_TARG_STEP/15)], color=color, linewidth=1)
+                self.viewer.draw_polyline( [(
+                    hill_x + dx,
+                    hill_y + 0.5*leg_targeting_potential(dx, 1) + 1/SCALE,
+                    ) for dx in np.arange(-2*MAX_TARG_STEP,+2*MAX_TARG_STEP,MAX_TARG_STEP/15)], color=color, linewidth=1)
+                t = rendering.Transform(translation=(target_x, hill_y))
+                self.viewer.draw_circle(5/SCALE, 10, color=color).add_attr(t)
 
-        self.viewer.scroll = self.scroll
-        self.chart_legs.draw(self.viewer,   0.4, 0.6, (1,  0,  0))
-        self.chart_height.draw(self.viewer, 0.7, 0.6, (0,  0.5,0))
-        self.chart_angle.draw(self.viewer,  1.0, 0.6, (0,  0,  0.5))
-        self.chart_misc.draw(self.viewer,   0.4, 0.4, (0.5,0.3,0.3))
+            self.viewer.scroll = self.scroll
+            self.chart_legs.draw(self.viewer,   0.4, 0.6, (1,  0,  0))
+            self.chart_height.draw(self.viewer, 0.7, 0.6, (0,  0.5,0))
+            self.chart_angle.draw(self.viewer,  1.0, 0.6, (0,  0,  0.5))
+            self.chart_misc.draw(self.viewer,   0.4, 0.4, (0.5,0.3,0.3))
+
         return self.viewer.render(return_rgb_array = mode=='rgb_array')
 
     def print_state(self, s):
