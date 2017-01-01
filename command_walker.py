@@ -69,7 +69,7 @@ FRICTION = 2.5
 HULL_HEIGHT_POTENTIAL = 25.0 # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 5.0  # keep head level
 LEG_POTENTIAL         = 2.0
-SPEED_HINT            = 0.005
+SPEED_HINT            = 0.15
 REWARD_CRASH          = -5.0
 
 verbose = 1
@@ -153,17 +153,29 @@ class CommandWalker(gym.Env):
         self.viewer = None
         self.manual = False
         self.manual_height = 0
+        self.experiment_name = ""
+        self.experiment_playback = False
+        self.step_value_per_frame = np.zeros( (1,), dtype=np.float32 )
 
         self.world = Box2D.b2World()
         self.terrain = None
         self.hull = None
 
-        self.prev_shaping = None
         self._reset()
 
         high = np.array([np.inf]*39)
         self.action_space = spaces.Box(np.array([-1,-1,-1,-1]), np.array([+1,+1,+1,+1]))
         self.observation_space = spaces.Box(-high, high)
+
+    def experiment(self, name, playback):
+        self.experiment_name = name
+        self.experiment_playback = playback
+        try:
+            self.step_value_per_frame = np.memmap("models/%s.step_value_per_frame" % name, mode="r+", shape=(1,), dtype=np.float32)
+        except:
+            self.step_value_per_frame = np.memmap("models/%s.step_value_per_frame" % name, mode="w+", shape=(1,), dtype=np.float32)
+        if not playback:
+            self.step_value_per_frame[0] = 0.0
 
     def _seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -345,6 +357,7 @@ class CommandWalker(gym.Env):
         self.chart_misc  = RewardChart()
         self.external_command = 0
         self.manual_jump = 0
+        self.potential_legs = 0.0
         self.steps_done = 0
         self.jump = 0
         self.hull_desired_position = self.np_random.uniform(low=-1, high=+1)
@@ -443,11 +456,14 @@ class CommandWalker(gym.Env):
         self.legs[1].tip_x = 0
         self.legs[1].tip_y = 0
         self.world.Step(1.0/FPS, 6*30, 2*30)
-        _, self.potential_height, self.potential_angle = self._potentials()  # used here, first result ignored
+        self.potential_legs = self._potentials()  # used here, first result ignored
 
-        return self._step(np.array([0,0,0,0]))[0]
+        sys.stdout.write(" spf=%0.2f " % self.step_value_per_frame)
+        sys.stdout.flush()
 
-    def _step(self, action):
+        return self._step(np.array([0,0,0,0]), reset=True)[0]
+
+    def _step(self, action, reset=False):
         #self.hull.ApplyForceToCenter((0, 20), True) -- Uncomment this to receive a bit of stability help
         control_speed = False  # Should be easier as well
         if control_speed:
@@ -473,35 +489,42 @@ class CommandWalker(gym.Env):
             leg.tip_y = leg.position[1] - np.cos(leg.angle) * 0.5*LEG_H
         if self.manual: self.hull_desired_position = self.manual_height
 
-        self._set_feet_target()
-
         ######################################################## REWARDS ####################################################################
         LEAK = 1-GAMMA
-        potential_legs, potential_height, potential_angle = self._potentials()
+        potential_legs = self._potentials()
 
-        reward_legs   = potential_legs   - self.potential_legs
-        reward_legs *= (0.2+0.8*potential_height)
-        reward_legs *= (0.5+0.5*potential_angle)
-        #reward_height = potential_height - self.potential_height
-        #reward_angle  = potential_angle  - self.potential_angle
-        self.potential_legs   = potential_legs
-        self.potential_height = potential_height
-        self.potential_angle  = potential_angle
+        self.legs_level = min(self.legs[0].tip_y, self.legs[1].tip_y)
+        above1 = 1.40  # for hull_desired_position==-1
+        above2 = 2.15  # for hull_desired_position==+1
+        above = above1 + (above2-above1)*((self.hull_desired_position+1)/2)
+        self.hull_above_legs_shouldbe = self.legs_level + above*LEG_H
+        hull_height = (self.hull.position[1] - self.hull_above_legs_shouldbe) / LEG_H
+        hull_speed  = (self.hull.linearVelocity.y) / LEG_H / FPS / 0.1  # significant change over 0.1 sec
+        self.hull_dangerous_level = (self.hull.position[1] - self.legs_level) / LEG_H
+        hull_good_position = np.exp( (- np.square(hull_height) - np.square(hull_speed)) / (2*np.square(0.20)) )
+        log("potential_height exp(%+0.2f**2 %+0.2f**2) = %0.2f" % (hull_height, hull_speed, hull_good_position))
+        if self.hull_dangerous_level < 1.25: self.game_over = True
 
-        #reward_stop_alive = 0
+        potential_angle = np.exp( -np.square(self.hull.angle)/(2*np.square(0.2)) )
+
+        reward_legs = potential_legs - self.potential_legs
+        if reset: reward_legs = 0
+        self.potential_legs = potential_legs
+
+        self._set_feet_target()
+
         reward_leg_hint = 0
         if self.external_command==0:
-            pass
-            #if self.legs[0].ground_contact and self.legs[1].ground_contact:
-            #    #potential_height = max(0, potential_height-np.abs(self.hull.linearVelocity.x*SCALE/FPS))
-            #else:
-            #    potential_height = 0
-            #log("STOP ALIVE REWARD %0.2f" % potential_height)
+            reward_legs += (SPEED_HINT + 0.70*self.step_value_per_frame[0]) * (hull_good_position-1)
+
         elif self.external_command in [-1,+1]:
+            reward_legs -= 0.70*self.step_value_per_frame[0]
+            if reward_legs > 0:
+                reward_legs *= (0.1+0.9*hull_good_position)
             prop_leg = self.legs[1-self.leg_active]
             prop_dist = prop_leg.tip_x - self.hull.position[0]
             if prop_dist*self.external_command > 0 and prop_leg.ground_contact:
-                reward_leg_hint = SPEED_HINT*SCALE*self.external_command*self.hull.linearVelocity.x*SCALE/FPS
+                reward_leg_hint = SPEED_HINT*self.external_command*self.hull.linearVelocity.x*SCALE/FPS
             else:
                 reward_leg_hint = 0
             #log("LEG HINT REWARD %0.2f" % reward_leg_hint)
@@ -509,18 +532,15 @@ class CommandWalker(gym.Env):
         reward_jump = 0
         if self.jump > 0:
             self.jump -= 1
-            reward_jump = SPEED_HINT*SCALE*20*max(0, self.hull.linearVelocity.y)*SCALE/FPS
+            reward_jump = SPEED_HINT*20*max(0, self.hull.linearVelocity.y)*SCALE/FPS
             log("JUMP REWARD %0.2f" % reward_jump)
 
-        reward  = reward_legs # + reward_height + reward_angle
-        #reward += LEAK*potential_height + LEAK*potential_angle
+        reward  = reward_legs
         reward += reward_leg_hint + reward_jump
         self.chart_legs.push(reward_legs)
-        self.chart_height.push(potential_height) #reward_height + LEAK*potential_height)
-        self.chart_angle.push(potential_angle)   # reward_angle + LEAK*potential_angle)
+        self.chart_height.push(hull_good_position)
+        self.chart_angle.push(potential_angle)
         self.chart_misc.push(reward_leg_hint)
-        #log("potential_legs %8.2f (%+8.2f)   potential_height %8.2f (%+8.2f)  potential_angle %8.2f (%+8.2f)" %
-        #    (potential_legs,reward_legs, potential_height,reward_height, potential_angle,reward_angle))
 
         #####################################################################################################################################
 
@@ -562,10 +582,12 @@ class CommandWalker(gym.Env):
         self.scroll = pos.x - VIEWPORT_W/SCALE/2
 
         done = False
-        if self.game_over or pos[0] < 0:
-            reward = REWARD_CRASH
+        if self.game_over:
+            # idea is to have stuck equal crash
+            reward = REWARD_CRASH - 1.00*self.step_value_per_frame[0] / (1-GAMMA)
+            log("CRASH REWARD %0.2f" % reward)
             done   = True
-        if pos[0] > (TERRAIN_LENGTH-TERRAIN_GRASS)*TERRAIN_STEP:
+        if pos[0] > (TERRAIN_LENGTH-TERRAIN_GRASS)*TERRAIN_STEP or pos[0] < 0:
             done   = True
         return np.array(state), reward, done, {}
 
@@ -594,7 +616,7 @@ class CommandWalker(gym.Env):
         allow_jump = 0.0
         if self.np_random.rand() < allow_change_command and not self.manual:
             while 1:
-                new_command = self.np_random.randint(low=-1, high=+2)
+                new_command = self.np_random.randint(low=-1, high=+1)
                 if self.external_command==new_command: continue
                 break
             self.command(new_command)
@@ -614,8 +636,10 @@ class CommandWalker(gym.Env):
             reset_potential = True
             assert(self.external_command==0)  # starts in the air
 
-        elif self.external_command==0:
+        if self.external_command==0:
             self.steps_done = 0
+            self.step_current_ts = 0
+            self.step_base_potential = 0
             diff = (hill[1] - hill[0]) / 2
             hill[0] = targ[0] = self.hull.position[0] - diff
             hill[1] = targ[1] = self.hull.position[0] + diff
@@ -649,6 +673,7 @@ class CommandWalker(gym.Env):
                 hill[a]   = targ[a]
                 targ[1-a] = targ[a] - MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 reset_potential = True
+            self.step_current_ts += 1
             if legs[a].ground_contact and legs[a].tip_x < legs[1-a].tip_x:
                 self.steps_done += 1
                 log("STEP -1 SWITCH LEGS")
@@ -658,6 +683,19 @@ class CommandWalker(gym.Env):
                 targ[a]   = targ[1-a] - MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 a = 1-a
                 reset_potential = True
+
+                if self.step_current_ts > 5: ############################
+                    diff = self.potential_legs - self.step_base_potential
+                    if not self.experiment_playback:
+                        spf = 0.9995*self.step_value_per_frame[0] + 0.0005*(diff / self.step_current_ts)
+                        if spf > 0: self.step_value_per_frame[0] = spf
+                    log("%i frames, potential %0.2f -> %0.2f, diff %0.2f, per frame %0.2f, averaged %0.2f" % (
+                        self.step_current_ts, self.step_base_potential, self.potential_legs,
+                        diff, diff / self.step_current_ts,
+                        self.step_value_per_frame[0]
+                        ))
+                self.step_current_ts = 0
+
             allow_random_command = 0.01
 
         lidar = LidarCallback()
@@ -669,21 +707,12 @@ class CommandWalker(gym.Env):
             self.hill_y[i] = lidar.p2[1]
 
         if reset_potential: # without feeding to reward (would be spike)
-            self.potential_legs, _, _ = self._potentials()
+            self.potential_legs = self._potentials()
+            if self.step_base_potential==0:
+                self.step_base_potential = self.potential_legs
         self.leg_active = a
 
     def _potentials(self):
-        self.legs_level = min(self.legs[0].tip_y, self.legs[1].tip_y)
-        above1 = 1.40  # for hull_desired_position==-1
-        above2 = 2.15  # for hull_desired_position==+1
-        above = above1 + (above2-above1)*((self.hull_desired_position+1)/2)
-        self.hull_above_legs_shouldbe = self.legs_level + above*LEG_H
-        potential_height = (self.hull.position[1] - self.hull_above_legs_shouldbe) / LEG_H
-        self.hull_dangerous_level = (self.hull.position[1] - self.legs_level) / LEG_H
-        log("potential_height exp(%0.2f**2) = %0.2f" % (potential_height, np.exp(-np.square(potential_height)/(2*np.square(0.20))) ))
-
-        if self.hull_dangerous_level < 1.25: self.game_over = True
-
         leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
         leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
         #print("pot[a]   = %0.2f" % leg0_pot if self.leg_active else leg1_pot)
@@ -694,11 +723,8 @@ class CommandWalker(gym.Env):
             leg0_pot *= 0.3  # stop: legs less important, stays here only as a tip
             leg1_pot *= 0.3
 
-        return (
-            LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot,
-            np.exp( -np.square(potential_height)/(2*np.square(0.20)) ),  # 0.15 of leg height is acceptable range
-            np.exp( -np.square(self.hull.angle)/(2*np.square(0.2)) ),
-            )
+        x = LEG_POTENTIAL*leg0_pot + LEG_POTENTIAL*leg1_pot
+        return x
 
     def _render(self, mode='human', close=False):
         if close:

@@ -194,6 +194,7 @@ if not demo and not manual:
         #with sess:
         set_global_seeds(seed)
         env = gym.make(env_id)
+        env.experiment(experiment, False)
         #env = skip_wrap(env)
 
         #gym.logger.setLevel(logging.WARN)
@@ -219,6 +220,7 @@ else: # demo
     command_walker.VIEWPORT_H = 800
 
     env = gym.make(env_id)
+    env.experiment(experiment, playback=True)
     env.manual = manual
     #env = skip_wrap(env)
     #env.monitor.start("demo", force=True)
@@ -264,7 +266,7 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 1
+            stochastic = 0
             a, vpred, *state = pi.act(stochastic, s, *state)
             r = 0
             sn, rplus, done, info = env.step(a)
@@ -275,6 +277,7 @@ else: # demo
             frame += 1
             if done or human_wants_restart: break
             env.render("human")
+            env.viewer.window.set_caption("%09.2f in %05i" % (uscore, frame))
             #if "print_state" in type(env).__dict__:
             #    env.print_state(sn)
             while human_sets_pause:
