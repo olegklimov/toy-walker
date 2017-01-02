@@ -1,4 +1,5 @@
 lander.py
+command_walker.py
 ppo-test.py
 ../rl-algs/rl_algs/pposgd/pposgd.py
 ../rl-algs/rl_algs/pposgd/cnn_policy.py
