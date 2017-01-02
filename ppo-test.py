@@ -88,7 +88,7 @@ def policy_fn(name, ob_space, ac_space):
                 mean = U.dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
-                pdparam = U.concatenate([mean, mean * 0.0 - 0.5 + 0.0*logstd], axis=1)
+                pdparam = U.concatenate([mean, mean * 0.0 - 0.2 + 0.0*logstd], axis=1)
                 # -0.5 => 0.6
                 # -1.6 => 0.2
             else:
