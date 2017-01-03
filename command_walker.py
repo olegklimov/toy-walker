@@ -66,7 +66,7 @@ TERRAIN_LENGTH = 200     # in steps
 TERRAIN_HEIGHT = VIEWPORT_H/SCALE/4
 TERRAIN_GRASS    = 13    # low long are grass spots, in steps
 FRICTION = 2.5
-HULL_HEIGHT_POTENTIAL = 5.0 # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
+HULL_HEIGHT_POTENTIAL = 15.0 # standing straight .. legs maximum to the sides = ~60 units of distance vertically, to reward using this coef
 HULL_ANGLE_POTENTIAL  = 5.0  # keep head level
 LEG_POTENTIAL         = 2.0
 SPEED_HINT            = 0.15
@@ -81,7 +81,6 @@ def leg_targeting_potential(x, y):
     '''
     x - horizontal difference from target
     y - vertical
-    https://academo.org/demos/3d-surface-plotter/?expression=(exp(-x%5E2)-0.5)%2F(1%2By)%2B0.02*(x-abs(x))&xRange=-5%2C%2B5&yRange=0%2C%2B10&resolution=100
     '''
     y = max(0,y)
     scale = 1/(0.10*MAX_TARG_STEP)
@@ -91,8 +90,8 @@ def leg_targeting_potential(x, y):
     # https://www.wolframalpha.com/input/?i=1+%2B+2*ln(2)+-+ln(1%2Bexp(x))+-+ln(1%2Bexp(-x))
     softsign = np.tanh(softabs)   # positive x = -1.6 .. 1.6
     y_step = softsign / (1+y)  # step of 1, positive at x near zero, negative at x outside -1.6 .. 1.6
-    return softabs + 6*y_step  # outside target zone, pulling leg up (make y higher) is twice as good as moving towards x=0
-    #(np.exp(-(x*scale)**2)-0.5) / (1+y*scale) - 0.55*scale*max(0,abs(x)-1)
+    return softabs + 12*y_step  # outside target zone, pulling leg up (make y higher) is twice as good as moving towards x=0
+    # https://academo.org/demos/3d-surface-plotter/?expression=1%2B2*log(2)-log(1%2Bexp(x))-log(1%2Bexp(-x))%2Btanh(1%2B2*log(2)-log(1%2Bexp(x))-log(1%2Bexp(-x)))%2F(1%2By)*12&xRange=-5%2C%2B5&yRange=0%2C%2B10&resolution=100
 
 class ContactDetector(contactListener):
     def __init__(self, env):
@@ -353,8 +352,8 @@ class CommandWalker(gym.Env):
         self.lidar_render = 0
         self.chart_legs   = RewardChart()
         self.chart_height = RewardChart(potential=True)
-        self.chart_angle = RewardChart(potential=True)
-        self.chart_misc  = RewardChart()
+        self.chart_high   = RewardChart()
+        self.chart_misc   = RewardChart()
         self.external_command = 0
         self.manual_jump = 0
         self.potential_legs = 0.0
@@ -486,8 +485,12 @@ class CommandWalker(gym.Env):
         self.ts += 1
 
         for leg in self.legs:
-            leg.tip_x = leg.position[0] + np.sin(leg.angle) * 0.5*LEG_H
-            leg.tip_y = leg.position[1] - np.cos(leg.angle) * 0.5*LEG_H
+            dx =  np.sin(leg.angle) * 0.5*LEG_H
+            dy = -np.cos(leg.angle) * 0.5*LEG_H
+            leg.tip_x  = leg.position.x + dx
+            leg.tip_y  = leg.position.y + dy
+            leg.tip_vx = leg.linearVelocity.x - leg.angularVelocity*dy
+            leg.tip_vy = leg.linearVelocity.y + leg.angularVelocity*dx
         if self.manual: self.hull_desired_position = self.manual_height
 
         ######################################################## REWARDS ####################################################################
@@ -506,6 +509,7 @@ class CommandWalker(gym.Env):
             reward_height = 0
 
         reward_leg_hint = 0
+        highstep_hint = 0
         if self.external_command==0:
             pass
             #if not self.legs[0].ground_contact or not self.legs[1].ground_contact:
@@ -515,13 +519,23 @@ class CommandWalker(gym.Env):
         elif self.external_command in [-1,+1]:
             #if reward_legs > 0:
             #    reward_legs *= (0.80+0.20*hull_good_position)
+            active_leg = self.legs[self.leg_active]
             prop_leg = self.legs[1-self.leg_active]
             prop_dist = prop_leg.tip_x - self.hull.position[0]
             if prop_dist*self.external_command > 0 and prop_leg.ground_contact:
                 reward_leg_hint = SPEED_HINT*self.external_command*self.hull.linearVelocity.x*SCALE/FPS
             else:
                 reward_leg_hint = 0
-            #log("LEG HINT REWARD %0.2f" % reward_leg_hint)
+
+            dist_x = (active_leg.tip_x - prop_leg.tip_x)*self.external_command
+            above   = (active_leg.tip_y - prop_leg.tip_y) / LEG_H
+            above01 = (above - 0.3) * 3  # -1 at legs level
+            if dist_x < 0 and above01 < 0:
+                vx_problem = min(0,  above01*active_leg.tip_vx*SCALE/FPS*self.external_command)  # negative
+                vy_hint    = max(0, -above01*active_leg.tip_vy*SCALE/FPS)                        # positive
+                highstep_hint = 0.5*max(SPEED_HINT,self.step_value_per_frame[0])*(vx_problem + vy_hint)
+                log("highstep_hint above01=%0.2f >>> vx=%0.2f vx_problem=%0.2f; vy=%0.2f vy_hint=%0.2f => %0.2f" % (
+                    above01, active_leg.tip_vx, vx_problem, active_leg.tip_vy, vy_hint, highstep_hint))
 
         reward_jump = 0
         if self.jump > 0:
@@ -530,10 +544,10 @@ class CommandWalker(gym.Env):
             log("JUMP REWARD %0.2f" % reward_jump)
 
         reward  = reward_legs
-        reward += reward_height + reward_leg_hint + reward_jump
+        reward += reward_height + reward_leg_hint + highstep_hint + reward_jump
         self.chart_legs.push(reward_legs)
         self.chart_height.push(reward_height)
-        self.chart_angle.push(0)
+        self.chart_high.push(highstep_hint)
         self.chart_misc.push(reward_leg_hint)
 
         #####################################################################################################################################
@@ -719,7 +733,7 @@ class CommandWalker(gym.Env):
         if self.hull_dangerous_level < 1.25: self.game_over = True
         potential_hull = (np.square(hull_height) + np.square(hull_speed) + np.square(hull_angle)) / (2*np.square(0.20))
 
-        log("potential hull_height=%+0.2f hull_speed=%+0.2f hull_angle=%+0.2f => %0.2f" % (hull_height, hull_speed, hull_angle, potential_hull))
+        #log("potential hull_height=%+0.2f hull_speed=%+0.2f hull_angle=%+0.2f => %0.2f" % (hull_height, hull_speed, hull_angle, potential_hull))
 
         leg0_pot = leg_targeting_potential(self.legs[0].tip_x - self.hill_x[0], self.legs[0].tip_y - self.hill_y[0])
         leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
@@ -805,6 +819,10 @@ class CommandWalker(gym.Env):
                 if leg==self.legs[self.leg_active]:
                     t = rendering.Transform(translation=leg.position)
                     self.viewer.draw_circle(2/SCALE, 10, color=(1,0,0)).add_attr(t)
+                self.viewer.draw_polyline( [
+                    (leg.tip_x,               leg.tip_y),
+                    (leg.tip_x+leg.tip_vx, leg.tip_y+leg.tip_vy)
+                    ], color=(1,1,1), linewidth=2)
 
             for i in [0,1]:
                 hill_x = self.hill_x[i]
@@ -825,7 +843,7 @@ class CommandWalker(gym.Env):
             self.viewer.scroll = self.scroll
             self.chart_legs.draw(self.viewer,   0.4, 0.6, (1,  0,  0))
             self.chart_height.draw(self.viewer, 0.7, 0.6, (0,  0.5,0))
-            self.chart_angle.draw(self.viewer,  1.0, 0.6, (0,  0,  0.5))
+            self.chart_high.draw(self.viewer,  1.0, 0.6, (0,  0,  0.5))
             self.chart_misc.draw(self.viewer,   0.4, 0.4, (0.5,0.3,0.3))
 
         return self.viewer.render(return_rgb_array = mode=='rgb_array')
