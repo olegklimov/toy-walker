@@ -1,6 +1,8 @@
 lander.py
 command_walker.py
 ppo-test.py
+mpi-mnist.py
+../household-agents/train.py
 ../rl-algs/rl_algs/pposgd/pposgd.py
 ../rl-algs/rl_algs/pposgd/cnn_policy.py
 ../rl-algs/rl_algs/pposgd/lstm_policy.py
