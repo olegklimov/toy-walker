@@ -531,9 +531,12 @@ class CommandWalker(gym.Env):
             above   = (active_leg.tip_y - prop_leg.tip_y) / LEG_H
             above01 = (above - 0.3) * 3  # -1 at legs level
             if dist_x < 0 and above01 < 0:
-                vx_problem = min(0,  above01*active_leg.tip_vx*SCALE/FPS*self.external_command)  # negative
-                vy_hint    = max(0, -above01*active_leg.tip_vy*SCALE/FPS)                        # positive
-                highstep_hint = 0.5*max(SPEED_HINT,self.step_value_per_frame[0])*(vx_problem + vy_hint)
+                vx_problem = min(0, above01*active_leg.tip_vx*SCALE/FPS*self.external_command)  # negative
+                #vx_problem = 0
+                vy_hint    = (-above01*active_leg.tip_vy*SCALE/FPS)                        # positive
+                highstep_hint = 1*SPEED_HINT*(vx_problem + vy_hint)
+                #highstep_hint = 1*SPEED_HINT*vy_hint
+                # 10 fail to converge
                 log("highstep_hint above01=%0.2f >>> vx=%0.2f vx_problem=%0.2f; vy=%0.2f vy_hint=%0.2f => %0.2f" % (
                     above01, active_leg.tip_vx, vx_problem, active_leg.tip_vy, vy_hint, highstep_hint))
 
@@ -544,7 +547,7 @@ class CommandWalker(gym.Env):
             log("JUMP REWARD %0.2f" % reward_jump)
 
         reward  = reward_legs
-        reward += reward_height + reward_leg_hint + highstep_hint + reward_jump
+        reward += reward_height + reward_leg_hint + reward_jump + highstep_hint
         self.chart_legs.push(reward_legs)
         self.chart_height.push(reward_height)
         self.chart_high.push(highstep_hint)

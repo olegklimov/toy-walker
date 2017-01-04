@@ -44,8 +44,8 @@ html2 = """
             0: {
             },
             1: {
-                minValue: -100,
-                maxValue: 500
+                minValue: -1000,
+                maxValue:  1000
             },
             2: {
                 gridlines: { count: 0 },

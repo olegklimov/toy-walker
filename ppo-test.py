@@ -125,14 +125,14 @@ if not demo and not manual:
         max_kl=0.03, clip_param=0.2, entcoeff=0.00, # objective
         #klcoeff=0.01, adapt_kl=0,
         klcoeff=0.001, adapt_kl=0.03,
-        optim_epochs=24, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
+        optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
         gamma=0.99, lam=0.95, # advantage estimation
         )
-
-    # classic
-    #optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=16, linesearch=True, # optimization
-    #gamma=0.99, lam=0.9, # advantage estimation
-
+    # optim_epochs 24 => good
+    # optim_epochs 10 => slightly worse, but faster
+    # batch 16  => too slow
+    # batch 64  most experiments
+    # batch 128 => can't converge
     def train():
         command_walker.verbose = 0
         whoami  = mpi_fork(num_cpu)
@@ -216,7 +216,7 @@ else: # demo
     sess = tf.InteractiveSession(config=config)
 
     #command_walker.verbose = 0
-    command_walker.VIEWPORT_W = 1000
+    command_walker.VIEWPORT_W = 1200
     command_walker.VIEWPORT_H = 800
 
     env = gym.make(env_id)
