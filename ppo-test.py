@@ -10,7 +10,7 @@ from rl_algs.common.mpi_fork import mpi_fork
 from rl_algs import pposgd
 #from rl_algs.pposgd.mlp_policy import MlpPolicy
 #from rl_algs.sandbox.hoj.common import logx as logger
-#from rl_algs.sandbox.oleg.evolution import evolution_simple
+import rl_algs.sandbox.oleg.evolution
 
 from mpi4py import MPI
 num_cpu = 8
@@ -18,32 +18,39 @@ num_cpu = 8
 import gym
 from gym.envs.registration import register
 from gym.wrappers import SkipWrapper
-skip_wrap = SkipWrapper(2)
+skip_wrap = lambda x: x
+#skip_wrap = SkipWrapper(2)
 
-import command_walker
-register(
-    id='CommandWalker-v0',
-    entry_point='command_walker:CommandWalker',
-    timestep_limit=700,
-    )
-
-experiment = sys.argv[1]
-print("experiment_name: '%s'" % experiment)
-#env_id = "LunarLanderContinuous-v2"
-#env_id = "BipedalWalker-v2"
-env_id = "CommandWalker-v0"
+env_id = sys.argv[1]
+experiment = sys.argv[2]
 max_timesteps = 16000000
 seed = 1337
 
-if len(sys.argv)>2:
-    demo = sys.argv[2]=="demo"
-    manual = sys.argv[2]=="manual"
+if len(sys.argv)>3:
+    demo = sys.argv[3]=="demo"
+    manual = sys.argv[3]=="manual"
     if not demo and not manual:
         load_previous_experiment = sys.argv[2]
 else:
     demo = False
     manual = False
     load_previous_experiment = None
+
+print("environment:              '%s'" % env_id)
+print("experiment_name:          '%s'" % experiment)
+if not demo and not manual:
+    print("load_previous_experiment: '%s'" % load_previous_experiment)
+else:
+    print("demo:   %s" % demo)
+    print("manual: %s" % manual)
+
+if env_id=='CommandWalker-v0':
+    import command_walker
+    register(
+        id='CommandWalker-v0',
+        entry_point='command_walker:CommandWalker',
+        timestep_limit=700,
+        )
 
 
 # ------------------------------- network ----------------------------------
@@ -136,23 +143,22 @@ if not demo and not manual:
     # batch 64  most experiments
     # batch 128 => can't converge
     def train():
-        command_walker.verbose = 0
+        if env_id=='CommandWalker-v0':
+            command_walker.verbose = 0
         whoami  = mpi_fork(num_cpu)
-        print("MPI whoami == '%s'" % whoami, flush=True)
         if whoami == "parent":
             return
+        print("num_cpu: %i" % num_cpu, flush=True)
+
         import rl_algs.common.tf_util as U
         rank = MPI.COMM_WORLD.Get_rank()
-        print("MPI Rank == '%i'" % rank, flush=True)
-        #if rank != 0:
-        #    logger.set_level(logger.DISABLED)
 
-        logger.set_expt_dir("progress")
+        logger.set_expt_dir(os.path.join(env_id, "progress"))
         if rank==0:
             tab_fn = "%s.csv" % (experiment)
             log_fn = "%s.log" % (experiment)
-            with open(os.path.join("progress", log_fn), "w"): pass
-            with open(os.path.join("progress", tab_fn), "w"): pass
+            with open(os.path.join(env_id, "progress", log_fn), "w"): pass
+            with open(os.path.join(env_id, "progress", tab_fn), "w"): pass
             logger.add_tabular_output(tab_fn)
             logger.add_text_output(log_fn)
             logger.info(subprocess.Popen(['git', 'diff'], stdout=subprocess.PIPE, universal_newlines=True).stdout.read())
@@ -197,7 +203,7 @@ if not demo and not manual:
         set_global_seeds(seed)
         env = gym.make(env_id)
         env.experiment(experiment, False)
-        #env = skip_wrap(env)
+        env = skip_wrap(env)
 
         #gym.logger.setLevel(logging.WARN)
         env.seed(seed + 10000*rank)
@@ -217,14 +223,10 @@ else: # demo
     config.gpu_options.per_process_gpu_memory_fraction = 0.1
     sess = tf.InteractiveSession(config=config)
 
-    #command_walker.verbose = 0
-    command_walker.VIEWPORT_W = 1200
-    command_walker.VIEWPORT_H = 800
-
     env = gym.make(env_id)
     env.experiment(experiment, playback=True)
     env.manual = manual
-    #env = skip_wrap(env)
+    env = skip_wrap(env)
     #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space
