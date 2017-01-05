@@ -8,7 +8,9 @@ import tinkerbell.logger as logger
 from rl_algs.common import set_global_seeds
 from rl_algs.common.mpi_fork import mpi_fork
 from rl_algs import pposgd
-from rl_algs.pposgd.mlp_policy import MlpPolicy
+#from rl_algs.pposgd.mlp_policy import MlpPolicy
+#from rl_algs.sandbox.hoj.common import logx as logger
+#from rl_algs.sandbox.oleg.evolution import evolution_simple
 
 from mpi4py import MPI
 num_cpu = 8
@@ -47,7 +49,7 @@ else:
 # ------------------------------- network ----------------------------------
 
 policy_kwargs = dict(
-    hid_size=120,
+    hid_size=196,
     num_hid_layers=2
     )
 
@@ -275,14 +277,18 @@ else: # demo
             #    done = True
             uscore += r
             frame += 1
-            if done or human_wants_restart: break
             env.render("human")
             env.viewer.window.set_caption("%09.2f in %05i" % (uscore, frame))
-            #if "print_state" in type(env).__dict__:
-            #    env.print_state(sn)
+            if done:
+                for _ in range(10):
+                    time.sleep(0.1)
+                    env.viewer.window.dispatch_events()
             while human_sets_pause:
                 time.sleep(0.1)
                 env.viewer.window.dispatch_events()
+            if done or human_wants_restart: break
+            #if "print_state" in type(env).__dict__:
+            #    env.print_state(sn)
         ts2 = time.time()
         print("score=%0.2f length=%i fps=%0.2f" % (uscore, frame, frame/(ts2-ts1)))
         env.monitor.close()

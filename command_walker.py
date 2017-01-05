@@ -70,7 +70,7 @@ HULL_HEIGHT_POTENTIAL = 15.0 # standing straight .. legs maximum to the sides = 
 HULL_ANGLE_POTENTIAL  = 5.0  # keep head level
 LEG_POTENTIAL         = 2.0
 SPEED_HINT            = 0.15
-REWARD_CRASH          = -5.0
+REWARD_CRASH          = -5
 
 verbose = 1
 def log(msg):
@@ -531,8 +531,8 @@ class CommandWalker(gym.Env):
             above   = (active_leg.tip_y - prop_leg.tip_y) / LEG_H
             above01 = (above - 0.3) * 3  # -1 at legs level
             if dist_x < 0 and above01 < 0:
-                vx_problem = min(0, above01*active_leg.tip_vx*SCALE/FPS*self.external_command)  # negative
-                #vx_problem = 0
+                #vx_problem = min(0, above01*active_leg.tip_vx*SCALE/FPS*self.external_command)  # negative
+                vx_problem = 0
                 vy_hint    = (-above01*active_leg.tip_vy*SCALE/FPS)                        # positive
                 highstep_hint = 1*SPEED_HINT*(vx_problem + vy_hint)
                 #highstep_hint = 1*SPEED_HINT*vy_hint
@@ -615,17 +615,17 @@ class CommandWalker(gym.Env):
         targ = self.target
         hill = self.hill_x
 
-        reset_potential = False
-        allow_change_command = 0.0
-        allow_jump = 0.0
+        reset_potential = self.ts < 5
+        prob_change_command = 0.0
+        prob_jump = 0.0
         if self.external_command in [0]:
-            allow_change_command = 0.05 if self.ts > 5 else 0.0  #if legs[0].ground_contact and legs[1].ground_contact else 0.0
-            allow_jump = 0.01 if legs[0].ground_contact and legs[1].ground_contact else 0.0
+            prob_change_command = 0.05 if self.ts > 5 and (legs[0].ground_contact or legs[1].ground_contact) else 0.0
+            prob_jump = 0.01 if legs[0].ground_contact and legs[1].ground_contact else 0.0
         if self.external_command in [-1,+1]:
-            allow_change_command = 0.01 if self.steps_done >= 2 else 0.0
-            allow_jump = 0.01 if legs[0].ground_contact or legs[1].ground_contact else 0.0
-        allow_jump = 0.0
-        if self.np_random.rand() < allow_change_command and not self.manual:
+            prob_change_command = 0.01 if self.steps_done >= 2 else 0.0
+            prob_jump = 0.01 if legs[0].ground_contact or legs[1].ground_contact else 0.0
+        prob_jump = 0.0
+        if self.np_random.rand() < prob_change_command and not self.manual:
             while 1:
                 new_command = self.np_random.randint(low=-1, high=+1)
                 if self.external_command==new_command: continue
@@ -633,7 +633,7 @@ class CommandWalker(gym.Env):
             self.command(new_command)
             reset_potential = True
         a = self.leg_active
-        if (self.np_random.rand() < allow_jump and not self.manual) or self.manual_jump==1:
+        if (self.np_random.rand() < prob_jump and not self.manual) or self.manual_jump==1:
             self.manual_jump = 0
             self.jump = 15
 
@@ -673,7 +673,6 @@ class CommandWalker(gym.Env):
                 targ[a]   = targ[1-a] + MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 a = 1-a
                 reset_potential = True
-            allow_random_command = 0.01
 
         elif self.external_command==-1:
             assert(targ[a] > targ[1-a])
@@ -707,8 +706,6 @@ class CommandWalker(gym.Env):
                         ))
                 self.step_current_ts = 0
 
-            allow_random_command = 0.01
-
         lidar = LidarCallback()
         for i in [0,1]:
             lidar.fraction = 1.0
@@ -733,8 +730,10 @@ class CommandWalker(gym.Env):
         hull_speed  = (self.hull.linearVelocity.y) / LEG_H / FPS / 0.1  # significant change over 0.1 sec
         hull_angle  = (self.hull.angle)
         self.hull_dangerous_level = (self.hull.position[1] - self.legs_level) / LEG_H
-        if self.hull_dangerous_level < 1.25: self.game_over = True
-        potential_hull = (np.square(hull_height) + np.square(hull_speed) + np.square(hull_angle)) / (2*np.square(0.20))
+        if self.hull_dangerous_level < 1.25 and (self.legs[0].ground_contact or self.legs[1].ground_contact):
+            self.game_over = True
+        # + np.square(hull_speed)
+        potential_hull = (np.square(hull_height) + np.square(hull_angle)) / (2*np.square(0.20))
 
         #log("potential hull_height=%+0.2f hull_speed=%+0.2f hull_angle=%+0.2f => %0.2f" % (hull_height, hull_speed, hull_angle, potential_hull))
 
