@@ -5,7 +5,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
 
 import tinkerbell.logger as logger
-from rl_algs.common import set_global_seeds
 from rl_algs.common.mpi_fork import mpi_fork
 from rl_algs import pposgd
 #from rl_algs.pposgd.mlp_policy import MlpPolicy
@@ -13,7 +12,8 @@ from rl_algs import pposgd
 import rl_algs.sandbox.oleg.evolution
 
 from mpi4py import MPI
-num_cpu = 8
+rank = MPI.COMM_WORLD.Get_rank()
+num_cpu = 4
 
 import gym
 from gym.envs.registration import register
@@ -24,7 +24,6 @@ skip_wrap = lambda x: x
 env_id = sys.argv[1]
 experiment = sys.argv[2]
 max_timesteps = 16000000
-seed = 1337
 
 if len(sys.argv)>3:
     demo = sys.argv[3]=="demo"
@@ -36,13 +35,14 @@ else:
     manual = False
     load_previous_experiment = None
 
-print("environment:              '%s'" % env_id)
-print("experiment_name:          '%s'" % experiment)
-if not demo and not manual:
-    print("load_previous_experiment: '%s'" % load_previous_experiment)
-else:
-    print("demo:   %s" % demo)
-    print("manual: %s" % manual)
+if os.getenv("IN_MPI") is None:
+    print("environment:              '%s'" % env_id)
+    print("experiment_name:          '%s'" % experiment)
+    if not demo and not manual:
+        print("load_previous_experiment: '%s'" % load_previous_experiment)
+    else:
+        print("demo:   %s" % demo)
+        print("manual: %s" % manual)
 
 if env_id=='CommandWalker-v0':
     import command_walker
@@ -97,7 +97,7 @@ def policy_fn(name, ob_space, ac_space):
                 mean = U.dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
-                pdparam = U.concatenate([mean, mean * 0.0 - 0.2 + 0.0*logstd], axis=1)
+                pdparam = U.concatenate([ tf.nn.tanh(mean), mean * 0.0 - 1.6 + 0.0*logstd ], axis=1)
                 # -0.5 => 0.6
                 # -1.6 => 0.2
             else:
@@ -129,40 +129,43 @@ def policy_fn(name, ob_space, ac_space):
 # ------------------------- learn -----------------------------
 
 if not demo and not manual:
-    learn_kwargs = dict(
-        timesteps_per_batch=1024, # horizon
-        max_kl=0.03, clip_param=0.2, entcoeff=0.00, # objective
-        #klcoeff=0.01, adapt_kl=0,
-        klcoeff=0.001, adapt_kl=0.03,
-        optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
-        gamma=0.99, lam=0.95, # advantage estimation
-        )
-    # optim_epochs 24 => good
-    # optim_epochs 10 => slightly worse, but faster
-    # batch 16  => too slow
-    # batch 64  most experiments
-    # batch 128 => can't converge
     def train():
+        learn_kwargs = dict(
+            timesteps_per_batch=1024, # horizon
+            max_kl=0.03, clip_param=0.2, entcoeff=0.00, # objective
+            #klcoeff=0.01, adapt_kl=0,
+            klcoeff=0.001, adapt_kl=0.03,
+            optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
+            gamma=0.99, lam=0.95, # advantage estimation
+            )
+        # optim_epochs 24 => good
+        # optim_epochs 10 => slightly worse, but faster
+        # batch 16  => too slow
+        # batch 64  most experiments
+        # batch 128 => can't converge
+        whoami = mpi_fork(num_cpu)
+        if whoami=="parent":
+            return
+        env = gym.make(env_id)
         if env_id=='CommandWalker-v0':
             command_walker.verbose = 0
-        whoami  = mpi_fork(num_cpu)
-        if whoami == "parent":
-            return
-        print("num_cpu: %i" % num_cpu, flush=True)
+            env.experiment(experiment, False)
+        env = skip_wrap(env)
 
         import rl_algs.common.tf_util as U
-        rank = MPI.COMM_WORLD.Get_rank()
 
-        logger.set_expt_dir(os.path.join(env_id, "progress"))
+        progress_dir = os.path.join(env_id, "progress")
+        os.makedirs(os.path.join(progress_dir, "monitor"), exist_ok=True)
+        logger.set_expt_dir(progress_dir)
+        logger.remove_text_output(sys.stdout)
         if rank==0:
             tab_fn = "%s.csv" % (experiment)
             log_fn = "%s.log" % (experiment)
-            with open(os.path.join(env_id, "progress", log_fn), "w"): pass
-            with open(os.path.join(env_id, "progress", tab_fn), "w"): pass
+            with open(os.path.join(progress_dir, log_fn), "w"): pass
+            with open(os.path.join(progress_dir, tab_fn), "w"): pass
             logger.add_tabular_output(tab_fn)
             logger.add_text_output(log_fn)
             logger.info(subprocess.Popen(['git', 'diff'], stdout=subprocess.PIPE, universal_newlines=True).stdout.read())
-        logger.remove_text_output(sys.stdout)
 
         config = tf.ConfigProto(
             inter_op_parallelism_threads=1,
@@ -199,24 +202,31 @@ if not demo and not manual:
             saver.restore(sess, 'models/%s' % load_previous_experiment)
             sys.stdout.flush()
 
-        #with sess:
-        set_global_seeds(seed)
-        env = gym.make(env_id)
-        env.experiment(experiment, False)
-        env = skip_wrap(env)
-
-        #gym.logger.setLevel(logging.WARN)
-        env.seed(seed + 10000*rank)
         env.monitor.start(os.path.join(logger.get_expt_dir(), "monitor"), force=True, video_callable=False)
         if rank==0:
             learn_kwargs["save_callback"] = save_policy
         learn_kwargs["load_callback"] = load_policy
-        pposgd.learn(env, policy_fn, max_timesteps=max_timesteps, **learn_kwargs)
+
+        if 0:
+            pposgd.learn(env, policy_fn,
+                max_timesteps=max_timesteps,
+                **learn_kwargs)
+        else:
+            learn_kwargs["gamma"] = 0.995
+            rl_algs.sandbox.oleg.evolution.learn(env, policy_fn,
+                max_timesteps=max_timesteps,
+                episodes_per_batch_per_worker=10,
+                perturbation=0.05,
+                **learn_kwargs)
+
         env.monitor.close()
 
     train()
 
-else: # demo
+
+# ------------------------- demo -----------------------------
+
+else:
     config = tf.ConfigProto(
         inter_op_parallelism_threads=1,
         intra_op_parallelism_threads=1)
@@ -224,7 +234,9 @@ else: # demo
     sess = tf.InteractiveSession(config=config)
 
     env = gym.make(env_id)
-    env.experiment(experiment, playback=True)
+    if env_id=='CommandWalker-v0':
+        command_walker.verbose = 0
+        env.experiment(experiment, playback=True)
     env.manual = manual
     env = skip_wrap(env)
     #env.monitor.start("demo", force=True)
@@ -245,6 +257,8 @@ else: # demo
         global human_sets_pause, human_wants_restart
         if pressed and key==kk.SPACE: human_sets_pause = not human_sets_pause
         if pressed and key==0xff0d: human_wants_restart = True
+        if pressed and key==ord('q'): sys.exit(0)
+        if env_id!='CommandWalker-v0': return
         command = keys.get(kk.RIGHT, 0) - keys.get(kk.LEFT, 0)
         env.command(command)
         env.manual_jump = keys.get(kk.LSHIFT, 0)
@@ -270,8 +284,9 @@ else: # demo
         while 1:
             s = sn
             #a = agent.control(s, rng)
-            stochastic = 0
+            stochastic = 1
             a, vpred, *state = pi.act(stochastic, s, *state)
+            print (a)
             r = 0
             sn, rplus, done, info = env.step(a)
             r += rplus

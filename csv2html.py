@@ -64,7 +64,7 @@ html2 = """
 
 
 need_files = []
-for root, dirs, files in os.walk("progress"):
+for root, dirs, files in os.walk("."):
     for fn in files:
         base,ext = os.path.splitext(fn)
         if ext=='.csv':
