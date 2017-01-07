@@ -9,11 +9,11 @@ from rl_algs.common.mpi_fork import mpi_fork
 from rl_algs import pposgd
 #from rl_algs.pposgd.mlp_policy import MlpPolicy
 #from rl_algs.sandbox.hoj.common import logx as logger
-import rl_algs.sandbox.oleg.evolution
+#import rl_algs.sandbox.oleg.evolution
 
 from mpi4py import MPI
 rank = MPI.COMM_WORLD.Get_rank()
-num_cpu = 4
+num_cpu = 8
 
 import gym
 from gym.envs.registration import register
@@ -80,6 +80,9 @@ def policy_fn(name, ob_space, ac_space):
 
             ob = U.get_placeholder(name="ob", dtype=tf.float32, shape=[sequence_length] + list(ob_space.shape))
 
+            # supervised
+            #x = tf.nn.relu( U.dense(x, 256, "dense1", weight_init=U.normc_initializer(1.0), learnable=learnable) )
+
             # value est
             with tf.variable_scope("retfilter"):
                 self.ret_rms = RunningMeanStd()
@@ -97,10 +100,13 @@ def policy_fn(name, ob_space, ac_space):
                 mean = U.dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
-                pdparam = U.concatenate([ tf.nn.tanh(mean), mean * 0.0 - 1.6 + 0.0*logstd ], axis=1)
+                pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 0.2 + 0.0*logstd ], axis=1)
+                # -0.2 => 0.8 (works for ppo/walking)
                 # -0.5 => 0.6
-                # -1.6 => 0.2
+                # -1.6 => 0.2 (works for evolution)
+                # -2.3 => 0.1
             else:
+                bug()
                 pdparam = U.dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
             self.pd = pdtype.pdfromflat(pdparam)
 
@@ -207,7 +213,7 @@ if not demo and not manual:
             learn_kwargs["save_callback"] = save_policy
         learn_kwargs["load_callback"] = load_policy
 
-        if 0:
+        if 1:
             pposgd.learn(env, policy_fn,
                 max_timesteps=max_timesteps,
                 **learn_kwargs)
