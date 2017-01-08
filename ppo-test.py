@@ -23,7 +23,7 @@ skip_wrap = lambda x: x
 
 env_id = sys.argv[1]
 experiment = sys.argv[2]
-max_timesteps = 16000000
+max_timesteps = 1000000
 
 if len(sys.argv)>3:
     demo = sys.argv[3]=="demo"
@@ -60,8 +60,9 @@ policy_kwargs = dict(
     num_hid_layers=2
     )
 
-def policy_fn(name, ob_space, ac_space):
+def policy_fn(name, env, data_init=False):
     import rl_algs.common.tf_util as U
+    import rl_algs.common.tf_weightnorm as W
     from rl_algs.common.distributions import make_pdtype
     from rl_algs.common.mpi_running_mean_std import RunningMeanStd
     class ModifiedPolicy(object):
@@ -70,7 +71,10 @@ def policy_fn(name, ob_space, ac_space):
         def __init__(self, name, *args, **kwargs):
             with tf.variable_scope(name):
                 self._init(*args, **kwargs)
-                self.scope = tf.get_variable_scope().name
+                self.trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+            print("Policy summary:")
+            for v in self.trainable:
+                print("\t'%s'" % v.name)
 
         def _init(self, ob_space, ac_space, hid_size, num_hid_layers):
             assert isinstance(ob_space, gym.spaces.Box)
@@ -79,35 +83,79 @@ def policy_fn(name, ob_space, ac_space):
             sequence_length = None
 
             ob = U.get_placeholder(name="ob", dtype=tf.float32, shape=[sequence_length] + list(ob_space.shape))
+            self.ob = ob
 
-            # supervised
-            #x = tf.nn.relu( U.dense(x, 256, "dense1", weight_init=U.normc_initializer(1.0), learnable=learnable) )
+            if True:
+                with tf.variable_scope("retfilter"):
+                    self.ret_rms = RunningMeanStd()
+            else:
+                class Dummy:
+                    def update(self, x):
+                        pass
+                self.ret_rms = Dummy()
+                self.ret_rms.mean = 0.0
+                self.ret_rms.std = 250.0
 
-            # value est
-            with tf.variable_scope("retfilter"):
-                self.ret_rms = RunningMeanStd()
-            last_out = ob
-            for i in range(num_hid_layers):
-                last_out = tf.nn.relu(U.dense(last_out, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
-            self.vpredz = U.dense(last_out, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
-            self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean # raw = not standardized
+            old_school = False
+            self.trainable = []
+            if old_school:
+                # value est
+                x = ob
+                for i in range(num_hid_layers):
+                    x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0), trainable=self.trainable))
+                self.vpredz = U.dense(x, 1, "vffinal", weight_init=U.normc_initializer(1.0), trainable=self.trainable)[:,0]
+                self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
 
-            # action
-            last_out = ob
-            for i in range(num_hid_layers):
-                last_out = tf.nn.relu(U.dense(last_out, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                # action
+                x = ob
+                for i in range(num_hid_layers):
+                    x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0), trainable=self.trainable))
+                preaction = x
+
+            else:
+                self.wn_init = W.WeightNormInitializer()
+                x = ob
+                skip1 = x
+                x = tf.nn.relu( W.dense_wn(x, 128, "crazy1", wn_init=self.wn_init) )
+                skip2 = x
+                x = tf.nn.relu( W.dense_wn(x,  96, "crazy2", wn_init=self.wn_init) )
+                skip3 = x
+                x = tf.nn.relu( W.dense_wn(x,  96, "crazy3", wn_init=self.wn_init) )
+                skip4 = x
+                x = tf.nn.relu( W.dense_wn(x,  64, "crazy4", wn_init=self.wn_init) )
+                skip5 = x
+                x = tf.nn.relu( W.dense_wn(x,  32, "crazy5", wn_init=self.wn_init) )
+                skip6 = x
+                x = tf.nn.relu( W.dense_wn(x,  32, "crazy6", wn_init=self.wn_init) )
+                skip7 = x
+                #preaction = U.concatenate( [skip1,skip2,skip3,skip4,skip5,skip6,skip7], axis=1 )
+                preaction = skip7
+                print("preaction shape", preaction.get_shape().as_list())
+                self.vpredz = W.dense_wn(preaction, 1, "crazy_v")[:,0]
+                self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
+
+                #self.aux_rewardclass_gt = U.get_placeholder(name="aux_rewardclass_gt", dtype=tf.float32, shape=[sequence_length] + [2])
+                #aux_r_tensor = W.dense_wn(x, 2, "aux_reward_sign_logits", wn_init=self.wn_init)
+                #self.aux_rewardclass_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(aux_r_tensor, self.aux_rewardclass_gt))
+                #self.aux_rewardclass_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(aux_r_tensor, 1), tf.argmax(self.aux_rewardclass_gt, 1)), tf.float32))
+                #tf.summary.scalar('aux_rewardclass_loss', self.aux_rewardclass_loss)
+                #tf.summary.scalar('aux_rewardclass_accuracy', 100*self.aux_rewardclass_accuracy)
+
+                self.trainable += self.wn_init.all_trainable_vars
+
+            # action pd
             if isinstance(ac_space, gym.spaces.Box):
-                mean = U.dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
+                mean = U.dense(preaction, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
-                pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 0.2 + 0.0*logstd ], axis=1)
+                pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 1.0 + 0.0*logstd ], axis=1)
                 # -0.2 => 0.8 (works for ppo/walking)
                 # -0.5 => 0.6
                 # -1.6 => 0.2 (works for evolution)
                 # -2.3 => 0.1
             else:
                 bug()
-                pdparam = U.dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
+                pdparam = U.dense(preaction, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
             self.pd = pdtype.pdfromflat(pdparam)
 
             # ---
@@ -123,13 +171,33 @@ def policy_fn(name, ob_space, ac_space):
             #print(std)
             return ac1[0], vpred1[0]
         def get_variables(self):
-            return tf.get_collection(tf.GraphKeys.VARIABLES, self.scope)
+            return self.trainable
         def get_trainable_variables(self):
-            return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
+            return self.trainable
         def get_initial_state(self):
             return []
 
-    return ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, **policy_kwargs)
+    ob_space = env.observation_space
+    ac_space = env.action_space
+    pi = ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, **policy_kwargs)
+    U.initialize()
+
+    if data_init and False:
+        SAMPLES_DATA_INIT = 5000
+        observation_batch = np.zeros( [SAMPLES_DATA_INIT] + list(ob_space.shape), dtype=np.float32 )
+        print("Data init of %s" % name)
+        from tqdm import tqdm
+        done = True
+        for i in tqdm(range(SAMPLES_DATA_INIT)):
+            if done:
+                ob = env.reset()
+            else:
+                a = ac_space.sample()
+                ob, _, done, _ = env.step(a)
+            observation_batch[i] = ob
+        pi.wn_init.data_based_initialization({ pi.ob: observation_batch })
+
+    return pi
 
 
 # ------------------------- learn -----------------------------
@@ -142,7 +210,7 @@ if not demo and not manual:
             #klcoeff=0.01, adapt_kl=0,
             klcoeff=0.001, adapt_kl=0.03,
             optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
-            gamma=0.99, lam=0.95, # advantage estimation
+            gamma=0.99, lam=0.95, # advantage estimation (try lambda .99)
             )
         # optim_epochs 24 => good
         # optim_epochs 10 => slightly worse, but faster

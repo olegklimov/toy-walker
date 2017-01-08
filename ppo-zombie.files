@@ -9,6 +9,7 @@ mpi-mnist.py
 ../rl-algs/rl_algs/pposgd/mlp_policy.py
 ../rl-algs/rl_algs/pposgd/runners/run_pposgd_benchmark.py
 ../rl-algs/rl_algs/common/tf_util.py
+../rl-algs/rl_algs/common/tf_weightnorm.py
 ../rl-algs/rl_algs/common/distributions.py
 ../rl-algs/rl_algs/common/mpi_adam.py
 ../rl-algs/rl_algs/common/mpi_fork.py
