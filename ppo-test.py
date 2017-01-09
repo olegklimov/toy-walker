@@ -76,7 +76,7 @@ def policy_fn(name, env, data_init=False):
             for v in self.trainable:
                 print("\t'%s'" % v.name)
 
-        def _init(self, ob_space, ac_space, hid_size, num_hid_layers):
+        def _init(self, ob_space, ac_space, hid_size, num_hid_layers, oldschool):
             assert isinstance(ob_space, gym.spaces.Box)
 
             self.pdtype = pdtype = make_pdtype(ac_space)
@@ -96,21 +96,19 @@ def policy_fn(name, env, data_init=False):
                 self.ret_rms.mean = 0.0
                 self.ret_rms.std = 250.0
 
-            old_school = False
-            self.trainable = []
-            if old_school:
+            if oldschool:
                 # value est
                 x = ob
                 for i in range(num_hid_layers):
-                    x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0), trainable=self.trainable))
-                self.vpredz = U.dense(x, 1, "vffinal", weight_init=U.normc_initializer(1.0), trainable=self.trainable)[:,0]
+                    x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                self.vpredz = U.dense(x, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
                 self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
 
                 # action
                 x = ob
                 for i in range(num_hid_layers):
-                    x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0), trainable=self.trainable))
-                preaction = x
+                    x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                self.preaction = x
 
             else:
                 self.wn_init = W.WeightNormInitializer()
@@ -128,10 +126,10 @@ def policy_fn(name, env, data_init=False):
                 skip6 = x
                 x = tf.nn.relu( W.dense_wn(x,  32, "crazy6", wn_init=self.wn_init) )
                 skip7 = x
-                #preaction = U.concatenate( [skip1,skip2,skip3,skip4,skip5,skip6,skip7], axis=1 )
-                preaction = skip7
-                print("preaction shape", preaction.get_shape().as_list())
-                self.vpredz = W.dense_wn(preaction, 1, "crazy_v")[:,0]
+                #self.preaction = U.concatenate( [skip1,skip2,skip3,skip4,skip5,skip6,skip7], axis=1 )
+                self.preaction = skip7
+                print("preaction shape", self.preaction.get_shape().as_list())
+                self.vpredz = W.dense_wn(self.preaction, 1, "crazy_v")[:,0]
                 self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
 
                 #self.aux_rewardclass_gt = U.get_placeholder(name="aux_rewardclass_gt", dtype=tf.float32, shape=[sequence_length] + [2])
@@ -141,11 +139,9 @@ def policy_fn(name, env, data_init=False):
                 #tf.summary.scalar('aux_rewardclass_loss', self.aux_rewardclass_loss)
                 #tf.summary.scalar('aux_rewardclass_accuracy', 100*self.aux_rewardclass_accuracy)
 
-                self.trainable += self.wn_init.all_trainable_vars
-
             # action pd
             if isinstance(ac_space, gym.spaces.Box):
-                mean = U.dense(preaction, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
+                mean = U.dense(self.preaction, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
                 pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 1.0 + 0.0*logstd ], axis=1)
@@ -155,7 +151,7 @@ def policy_fn(name, env, data_init=False):
                 # -2.3 => 0.1
             else:
                 bug()
-                pdparam = U.dense(preaction, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
+                pdparam = U.dense(self.preaction, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
             self.pd = pdtype.pdfromflat(pdparam)
 
             # ---
@@ -176,26 +172,97 @@ def policy_fn(name, env, data_init=False):
             return self.trainable
         def get_initial_state(self):
             return []
+        def load(self, fn):
+            print("LOAD '%s'" % fn)
+            saver = tf.train.Saver(var_list=self.trainable)
+            saver.restore(tf.get_default_session(), 'models/%s' % fn)
+            sys.stdout.flush()
+        def save(self, fn):
+            print("SAVE\ntrainable:")
+            for v in self.trainable:
+                print("\t'%s'" % v.name)
+            saver = tf.train.Saver(var_list=self.trainable)
+            saver.save(tf.get_default_session(), 'models/%s' % fn)
 
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, **policy_kwargs)
+    pi = ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, oldschool=False, **policy_kwargs)
     U.initialize()
 
-    if data_init and False:
+    def data_init_func(train_writer, test_writer):
+        other_env = gym.make(env_id)
+        other_pi = ModifiedPolicy(name="pi", ob_space=ob_space, ac_space=ac_space, oldschool=True, **policy_kwargs)
+        U.initialize()
+        other_pi.load("ret_rms00_dummy")
+
         SAMPLES_DATA_INIT = 5000
         observation_batch = np.zeros( [SAMPLES_DATA_INIT] + list(ob_space.shape), dtype=np.float32 )
+        reward_batch = np.zeros( [SAMPLES_DATA_INIT,1] )
         print("Data init of %s" % name)
         from tqdm import tqdm
         done = True
+        stat_reward = 0.0
+        episode = 0
         for i in tqdm(range(SAMPLES_DATA_INIT)):
             if done:
-                ob = env.reset()
-            else:
-                a = ac_space.sample()
-                ob, _, done, _ = env.step(a)
+                ob = other_env.reset()
+                done = False
+                episode += 1
+            a, _  = other_pi.act(1, ob)
+            ob, r, done, _ = other_env.step(a)
+            stat_reward += r
             observation_batch[i] = ob
+            if r==100: r = 0
+            reward_batch[i,0] = r
+        print("Mean reward of %i episodes: %0.1f" % (episode, stat_reward / episode))
         pi.wn_init.data_based_initialization({ pi.ob: observation_batch })
+        pi.wn_init.dump_to_tf_summary()
+        tf.summary.image("observation_batch", observation_batch.reshape([1,SAMPLES_DATA_INIT] + list(ob_space.shape) + [1]))
+
+        print("reward_batch", reward_batch)
+        print("Supervised reward train:")
+        with tf.variable_scope("reward_supervised_train"):
+            reward_approx = U.dense(pi.preaction, 1, "crazy_reward")
+            reward_gt = tf.placeholder(dtype=tf.float32, shape=[SAMPLES_DATA_INIT,1])
+            batch_of_losses = tf.reduce_sum(tf.square(reward_gt-reward_approx), axis=[1])
+            print("batch_of_losses", batch_of_losses.get_shape().as_list())
+            reward_loss = tf.reduce_mean(batch_of_losses)
+            reward_trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+            for v in pi.trainable + reward_trainable:
+                print("\tREW '%s'" % v.name)
+            reward_adam = tf.train.AdamOptimizer(0.0005, beta1=0.5).minimize(reward_loss, var_list=pi.trainable + reward_trainable)
+            #reward_adam = tf.train.GradientDescentOptimizer(0.0005).minimize(reward_loss, var_list=pi.trainable + reward_trainable)
+        tf.summary.scalar('reward_loss', reward_loss)
+        #tf.summary.image("reward_diff", (observation_batch).reshape([1,SAMPLES_DATA_INIT] + list(ob_space.shape) + [1]))
+        U.initialize()
+        merged = tf.summary.merge_all()
+
+        print("Unlearned:")
+        dump_me = tf.get_default_session().run(reward_approx, feed_dict={ pi.ob: observation_batch })
+        for i in range(100):
+            print("step %i real %0.3f predicted %0.3f" % (i, reward_batch[i], dump_me[i]), flush=True)
+        for i in tqdm(range(300)):
+            summary,a,b = tf.get_default_session().run( [merged,reward_adam,reward_loss], feed_dict={ pi.ob: observation_batch, reward_gt: reward_batch } )
+            train_writer.add_summary(summary, i)
+        print("Learned:")
+        dump_me = tf.get_default_session().run(reward_approx, feed_dict={ pi.ob: observation_batch })
+        for i in range(100):
+            print("step %i real %0.3f predicted %0.3f" % (i, reward_batch[i], dump_me[i]), flush=True)
+
+    if data_init and rank==0:
+        LOG_DIR = "ramdisk/"
+        import os, shutil
+        LOG_TEST_DIR  = LOG_DIR + "/test_%s" % experiment
+        LOG_TRAIN_DIR = LOG_DIR + "/train_%s" % experiment
+        shutil.rmtree(LOG_TEST_DIR,  ignore_errors=True)
+        shutil.rmtree(LOG_TRAIN_DIR, ignore_errors=True)
+        os.makedirs(LOG_TEST_DIR)
+        os.makedirs(LOG_TRAIN_DIR)
+        train_writer = tf.summary.FileWriter(LOG_TRAIN_DIR, tf.get_default_session().graph)
+        test_writer  = tf.summary.FileWriter(LOG_TEST_DIR)
+        data_init_func(train_writer, test_writer)
+        train_writer.close()
+        test_writer.close()
 
     return pi
 
@@ -260,21 +327,11 @@ if not demo and not manual:
                 dummy.timesteps_so_far += EVERY
             else:
                 return
-            tv_list = pi.get_trainable_variables()
-            print("SAVE")
-            print("tainable:")
-            for v in tv_list:
-                print("\t'%s'" % v.name)
-            saver = tf.train.Saver(var_list=tv_list)
-            saver.save(sess, 'models/%s' % experiment)
+            pi.save(experiment)
 
         def load_policy(pi):
             if not load_previous_experiment: return
-            print("LOAD '%s'" % load_previous_experiment)
-            tv_list = pi.get_trainable_variables()
-            saver = tf.train.Saver(var_list=tv_list)
-            saver.restore(sess, 'models/%s' % load_previous_experiment)
-            sys.stdout.flush()
+            pi.load(load_previous_experiment)
 
         env.monitor.start(os.path.join(logger.get_expt_dir(), "monitor"), force=True, video_callable=False)
         if rank==0:
@@ -316,12 +373,7 @@ else:
     #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = policy_fn("pi", ob_space, ac_space)
-    tf.global_variables_initializer().run()
-
-    print("Loading '%s'" % experiment)
-    tv_list = pi.get_trainable_variables()
-    saver = tf.train.Saver(var_list=tv_list)
+    pi = policy_fn("newpi", env)
 
     human_sets_pause = False
     from pyglet.window import key as kk
@@ -348,7 +400,7 @@ else:
     #state = pi.get_initial_state()
     while 1:
         human_wants_restart = False
-        saver.restore(sess, 'models/%s' % experiment)
+        pi.load(experiment)
         sn = env.reset()
         frame = 0
         r = 0

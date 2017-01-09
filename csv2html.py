@@ -1,4 +1,5 @@
 import csv, sys, os
+import numpy as np
 
 html1 = """
 <html>
@@ -42,6 +43,8 @@ html2 = """
         },
         vAxes: {
             0: {
+                minValue: 0,
+                maxValue: 1
             },
             1: {
                 minValue: -1000,
@@ -90,9 +93,9 @@ for fn in need_files:
                     (",".join([
                     row["TimestepsSoFar"],
                     #row["loss_pol_surr"],
-                    row["loss_vf_loss"],
-                    row["loss_kl"],
-                    row["ev_tdlam_before"],
+                    str(np.clip(float(row["loss_vf_loss"]), 0,1)),
+                    str(np.clip(float(row["loss_kl"]), 0,1)),
+                    str(np.clip(float(row["ev_tdlam_before"]), 0,1)),
                     row["EpRewMean"],
                     row["EpLenMean"],
                     row["TimeElapsed"],
