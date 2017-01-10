@@ -16,7 +16,7 @@ from rl_algs import pposgd
 #from rl_algs.sandbox.hoj.common import logx as logger
 #import rl_algs.sandbox.oleg.evolution
 
-num_cpu = 8
+num_cpu = 1
 
 import gym
 from gym.envs.registration import register
@@ -65,16 +65,17 @@ class ExperienceGenerator:
         self.BATCH = BATCH
 
     def reopen(self, mode):
-        #self.ob    = np.zeros( [REPLAY_BUFFER_DEPTH] + list(env.observation_space.shape), dtype=np.float32 )
-        self.ob    = np.memmap("ramdisk/%s_mmap_ob" % env_id, mode=mode, shape=[REPLAY_BUFFER_DEPTH] + list(env.observation_space.shape), dtype=np.float32)
-        assert len(env.action_space.shape)==1
-        #self.a     = np.zeros( [REPLAY_BUFFER_DEPTH,env.action_space.shape[0]], dtype=np.float32 )
-        self.a     = np.memmap("ramdisk/%s_mmap_a" % env_id, mode=mode, shape=[REPLAY_BUFFER_DEPTH,env.action_space.shape[0]], dtype=np.float32)
-        #self.obn   = np.zeros( [REPLAY_BUFFER_DEPTH] + list(env.observation_space.shape), dtype=np.float32 )
-        self.obn   = np.memmap("ramdisk/%s_mmap_obn" % env_id, mode=mode, shape=[REPLAY_BUFFER_DEPTH] + list(env.observation_space.shape), dtype=np.float32)
-        #self.r     = np.zeros( [REPLAY_BUFFER_DEPTH,1], dtype=np.float32 )
-        self.r     = np.memmap("ramdisk/%s_mmap_r" % env_id, mode=mode, shape=[REPLAY_BUFFER_DEPTH,1], dtype=np.float32)
-        self.rsign = np.zeros( [REPLAY_BUFFER_DEPTH,2], dtype=np.float32 )
+        dir = env_id
+        obshape = [self.REPLAY_BUFFER_DEPTH] + list(self.env.observation_space.shape)
+        acshape = [self.REPLAY_BUFFER_DEPTH] + list(self.env.action_space.shape)
+        print("batch observatrion", obshape, "action", acshape)
+        assert len(self.env.action_space.shape)==1
+        assert len(self.env.observation_space.shape)==1
+        self.ob    = np.memmap("%s/mmap_ob" % dir, mode=mode, shape=tuple(obshape), dtype=np.float32)
+        self.a     = np.memmap("%s/mmap_a" % dir, mode=mode, shape=tuple(acshape), dtype=np.float32)
+        self.obn   = np.memmap("%s/mmap_obn" % dir, mode=mode, shape=tuple(obshape), dtype=np.float32)
+        self.r     = np.memmap("%s/mmap_r" % dir, mode=mode, shape=(self.REPLAY_BUFFER_DEPTH,1), dtype=np.float32)
+        self.rsign = np.zeros( [self.REPLAY_BUFFER_DEPTH,2], dtype=np.float32 )
         self.total_reward = 0.0
         self.total_episodes = 0
         self.cursor = 2**31
@@ -82,10 +83,11 @@ class ExperienceGenerator:
 
     def gather_experience(self, policy, force_rerun=False):
         try:
+            self.reopen("r+")
             xp.export_viz_open(dir_jpeg, "r+")
         except:
             force_rerun = True
-            xp.export_viz_open(dir_jpeg, "w+")
+            self.reopen("w+")
         if force_rerun:
             self.run_a_lot_of_rollouts(policy)
         for i in range(self.REPLAY_BUFFER_DEPTH):
