@@ -58,8 +58,8 @@ LEG_DOWN = -8/SCALE
 LEG_W, LEG_H = 8/SCALE, 34/SCALE
 MAX_TARG_STEP = 64/SCALE
 
-VIEWPORT_W = 1200
-VIEWPORT_H = 800
+VIEWPORT_W = 2200
+VIEWPORT_H = 1800
 
 TERRAIN_STEP   = 14/SCALE
 TERRAIN_LENGTH = 200     # in steps
@@ -165,6 +165,8 @@ class CommandWalker(gym.Env):
         high = np.array([np.inf]*39)
         self.action_space = spaces.Box(np.array([-1,-1,-1,-1]), np.array([+1,+1,+1,+1]))
         self.observation_space = spaces.Box(-high, high)
+
+        self.arrays = []
 
     def experiment(self, name, playback):
         self.experiment_name = name
@@ -845,8 +847,23 @@ class CommandWalker(gym.Env):
             self.viewer.scroll = self.scroll
             self.chart_legs.draw(self.viewer,   0.4, 0.6, (1,  0,  0))
             self.chart_height.draw(self.viewer, 0.7, 0.6, (0,  0.5,0))
-            self.chart_high.draw(self.viewer,  1.0, 0.6, (0,  0,  0.5))
+            self.chart_high.draw(self.viewer,   1.0, 0.6, (0,  0,  0.5))
             self.chart_misc.draw(self.viewer,   0.4, 0.4, (0.5,0.3,0.3))
+
+        ascale = 0.005*VIEWPORT_H/SCALE
+        for i,a in enumerate(self.arrays):
+            assert len(a.shape)==2
+            assert a.shape[0]==1
+            c = a.shape[1]
+            basex = 0.05*VIEWPORT_H/SCALE
+            basey = 0.1*VIEWPORT_H/SCALE + i*ascale*3
+            poly = []
+            for b in range(c):
+                poly.append( (self.viewer.scroll + basex + (b+  0)*ascale, basey) )
+                poly.append( (self.viewer.scroll + basex + (b+  0)*ascale, basey + a[0,b]*ascale) )
+                poly.append( (self.viewer.scroll + basex + (b+0.5)*ascale, basey + a[0,b]*ascale) )
+                poly.append( (self.viewer.scroll + basex + (b+0.5)*ascale, basey) )
+            self.viewer.draw_polyline(poly, color=(0.9,0,0) )
 
         return self.viewer.render(return_rgb_array = mode=='rgb_array')
 

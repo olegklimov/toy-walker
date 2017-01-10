@@ -12,9 +12,12 @@ import tensorflow as tf
 import tinkerbell.logger as logger
 from rl_algs.common.mpi_fork import mpi_fork
 from rl_algs import pposgd
-#from rl_algs.pposgd.mlp_policy import MlpPolicy
 #from rl_algs.sandbox.hoj.common import logx as logger
 #import rl_algs.sandbox.oleg.evolution
+import rl_algs.common.tf_util as U
+import rl_algs.common.tf_weightnorm as W
+from rl_algs.common.distributions import make_pdtype
+from rl_algs.common.mpi_running_mean_std import RunningMeanStd
 
 num_cpu = 8
 
@@ -147,10 +150,6 @@ policy_kwargs = dict(
     )
 
 def policy_fn(name, env, data_init=False):
-    import rl_algs.common.tf_util as U
-    import rl_algs.common.tf_weightnorm as W
-    from rl_algs.common.distributions import make_pdtype
-    from rl_algs.common.mpi_running_mean_std import RunningMeanStd
     class ModifiedPolicy(object):
         recurrent = False
 
@@ -187,6 +186,7 @@ def policy_fn(name, env, data_init=False):
                 self.ret_rms.mean = 0.0
                 self.ret_rms.std = 250.0
 
+            self.arrays = []
             if oldschool:
                 # value est
                 x = ob
@@ -203,15 +203,20 @@ def policy_fn(name, env, data_init=False):
             else:
                 self.wn_init = W.WeightNormInitializer()
                 x = ob
+                self.arrays.append( ("ob", ob) )
                 x = tf.nn.relu( W.dense_wn(x,  96, "crazy1", wn_init=self.wn_init) )
                 skip1 = x
+                self.arrays.append( ("crazy1", x) )
                 x = tf.nn.relu( W.dense_wn(x,  64, "crazy2", wn_init=self.wn_init) )
                 skip2 = x
+                self.arrays.append( ("crazy2", x) )
                 x = tf.nn.relu( W.dense_wn(x,  64, "crazy3", wn_init=self.wn_init) )
                 skip3 = x
+                self.arrays.append( ("crazy3", x) )
                 self.crazy_final = x
 
                 x = U.concatenate([ob,skip2,skip3], axis=1)
+                self.arrays.append( ("concat_ob_crazy", x) )
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
                 self.pre_value = x
@@ -219,6 +224,7 @@ def policy_fn(name, env, data_init=False):
                 x = U.concatenate([ob,skip2,skip3], axis=1)
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                    self.arrays.append( ("polfc%i"%(i+1), x) )
                 self.pre_action = x
 
                 print("pre value shape", self.pre_value.get_shape().as_list())
@@ -237,6 +243,7 @@ def policy_fn(name, env, data_init=False):
             # action pd
             if isinstance(ac_space, gym.spaces.Box):
                 mean = U.dense(self.pre_action, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
+                self.arrays.append( ("mean", mean) )
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
                 pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 0.2 + 0.0*logstd ], axis=1)
@@ -254,9 +261,9 @@ def policy_fn(name, env, data_init=False):
             self.state_in = []
             self.state_out = []
 
-            stochastic = tf.placeholder(dtype=tf.bool, shape=())
-            ac = U.switch(stochastic, self.pd.sample(), self.pd.mode())
-            self._act = U.function([stochastic, ob], [ac, self.vpred])  #, logstd
+            self.stochastic = tf.placeholder(dtype=tf.bool, shape=())
+            ac = U.switch(self.stochastic, self.pd.sample(), self.pd.mode())
+            self._act = U.function([self.stochastic, ob], [ac, self.vpred])  #, logstd
 
         def act(self, stochastic, ob):
             ac1, vpred1 =  self._act(stochastic, ob[None])
@@ -513,6 +520,11 @@ else:
     env.viewer.window.on_key_press = key_press
     env.viewer.window.on_key_release = key_release
 
+    pi.arrays.reverse()
+    all_arrays = [x for name,x in pi.arrays]
+    all_arrays_names = [name for name,x in pi.arrays]
+    calculate_all_arrays = U.function([pi.stochastic, pi.ob], all_arrays)
+
     #state = pi.get_initial_state()
     while 1:
         human_wants_restart = False
@@ -525,10 +537,12 @@ else:
         ts1 = time.time()
         while 1:
             s = sn
-            #a = agent.control(s, rng)
-            stochastic = 1
+            stochastic = 0
             a, vpred, *state = pi.act(stochastic, s, *state)
-            print (a)
+            #print(a)
+            env.arrays = calculate_all_arrays(stochastic, s[None])
+            #for name,x in zip(all_arrays_names, env.arrays):
+            #    print(name, x.shape)
             r = 0
             sn, rplus, done, info = env.step(a)
             r += rplus
@@ -546,8 +560,6 @@ else:
                 time.sleep(0.1)
                 env.viewer.window.dispatch_events()
             if done or human_wants_restart: break
-            #if "print_state" in type(env).__dict__:
-            #    env.print_state(sn)
         ts2 = time.time()
         print("score=%0.2f length=%i fps=%0.2f" % (uscore, frame, frame/(ts2-ts1)))
         env.monitor.close()
