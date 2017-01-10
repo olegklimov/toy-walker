@@ -16,7 +16,7 @@ from rl_algs import pposgd
 #from rl_algs.sandbox.hoj.common import logx as logger
 #import rl_algs.sandbox.oleg.evolution
 
-num_cpu = 1
+num_cpu = 8
 
 import gym
 from gym.envs.registration import register
@@ -84,23 +84,32 @@ class ExperienceGenerator:
     def gather_experience(self, policy, force_rerun=False):
         try:
             self.reopen("r+")
-            xp.export_viz_open(dir_jpeg, "r+")
-        except:
+        except Exception as e:
+            print("mmap error: %s" % e)
             force_rerun = True
             self.reopen("w+")
         if force_rerun:
             self.run_a_lot_of_rollouts(policy)
+            print("Mean reward of %i episodes: %0.1f" % (self.total_episodes, self.total_reward / self.total_episodes))
+        else:
+            print("SKIP run_a_lot_of_rollouts()")
         for i in range(self.REPLAY_BUFFER_DEPTH):
-            self.rsign[i,0] = 1 if self.r[i,0]<0 else 0
-            self.rsign[i,1] = 0 if self.r[i,0]<0 else 1
+            s = self.r[i,0]<0
+            self.rsign[i,0] = 1 if s else 0
+            self.rsign[i,1] = 0 if s else 1
+        print("\treward negative: %i" % np.sum(self.rsign[:,0]))
+        print("\treward positive: %i" % np.sum(self.rsign[:,1]))
 
     def run_a_lot_of_rollouts(self, policy):
         done = True
+        score = 0.0
         for i in tqdm(range(self.REPLAY_BUFFER_DEPTH)):
             if done:
                 ob = self.env.reset()
+                print("RESET %0.1f" % score, flush=True)
                 done = False
                 self.total_episodes += 1
+                score = 0.0
             a, _  = policy.act(1, ob)
             self.a[i] = a
             self.ob[i] = ob
@@ -108,6 +117,7 @@ class ExperienceGenerator:
             self.obn[i] = ob
             self.r[i] = r
             self.total_reward += r
+            score += r
 
     def next_batch(self):
         if self.cursor+self.BATCH > self.REPLAY_BUFFER_DEPTH:
@@ -149,8 +159,13 @@ def policy_fn(name, env, data_init=False):
                 self._init(*args, **kwargs)
                 self.trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
             print("Policy summary:")
-            for v in self.trainable:
-                print("\t'%s'" % v.name)
+            for v in self.get_trainable_variables():
+                print("\ttrainable: '%s' (%i params)" % (v.name, U.numel(v)))
+            for v in self.get_crazy_variables():
+                print("\tsupervized: '%s' (%i params)" % (v.name, U.numel(v)))
+
+            self.setfromflat = U.SetFromFlat(self.trainable)
+            self.getflat = U.GetFlat(self.trainable)
 
         def _init(self, ob_space, ac_space, hid_size, num_hid_layers, oldschool):
             assert isinstance(ob_space, gym.spaces.Box)
@@ -177,43 +192,51 @@ def policy_fn(name, env, data_init=False):
                 x = ob
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
-                self.vpredz = U.dense(x, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
-                self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
+                self.pre_value = x
 
                 # action
                 x = ob
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
-                self.preaction = x
+                self.pre_action = x
 
             else:
                 self.wn_init = W.WeightNormInitializer()
                 x = ob
+                x = tf.nn.relu( W.dense_wn(x,  96, "crazy1", wn_init=self.wn_init) )
                 skip1 = x
-                x = tf.nn.relu( W.dense_wn(x, 128, "crazy1", wn_init=self.wn_init) )
+                x = tf.nn.relu( W.dense_wn(x,  64, "crazy2", wn_init=self.wn_init) )
                 skip2 = x
-                x = tf.nn.relu( W.dense_wn(x,  96, "crazy2", wn_init=self.wn_init) )
+                x = tf.nn.relu( W.dense_wn(x,  64, "crazy3", wn_init=self.wn_init) )
                 skip3 = x
-                x = tf.nn.relu( W.dense_wn(x,  96, "crazy3", wn_init=self.wn_init) )
-                skip4 = x
-                x = tf.nn.relu( W.dense_wn(x,  64, "crazy4", wn_init=self.wn_init) )
-                skip5 = x
-                #self.preaction = U.concatenate( [skip1,skip2,skip3,skip4,skip5,skip6,skip7], axis=1 )
-                self.preaction = x
-                print("preaction shape", self.preaction.get_shape().as_list())
-                self.vpredz = W.dense_wn(self.preaction, 1, "crazy_v")[:,0]
-                self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
+                self.crazy_final = x
 
-                #self.aux_rewardclass_gt = U.get_placeholder(name="aux_rewardclass_gt", dtype=tf.float32, shape=[sequence_length] + [2])
-                #aux_r_tensor = W.dense_wn(x, 2, "aux_reward_sign_logits", wn_init=self.wn_init)
-                #self.aux_rewardclass_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(aux_r_tensor, self.aux_rewardclass_gt))
-                #self.aux_rewardclass_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(aux_r_tensor, 1), tf.argmax(self.aux_rewardclass_gt, 1)), tf.float32))
-                #tf.summary.scalar('aux_rewardclass_loss', self.aux_rewardclass_loss)
-                #tf.summary.scalar('aux_rewardclass_accuracy', 100*self.aux_rewardclass_accuracy)
+                x = U.concatenate([ob,skip2,skip3], axis=1)
+                for i in range(num_hid_layers):
+                    x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                self.pre_value = x
+
+                x = U.concatenate([ob,skip2,skip3], axis=1)
+                for i in range(num_hid_layers):
+                    x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                self.pre_action = x
+
+                print("pre value shape", self.pre_value.get_shape().as_list())
+                print("pre action shape", self.pre_action.get_shape().as_list())
+
+            self.vpredz = U.dense(self.pre_value, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
+            self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
+
+            #self.aux_rewardclass_gt = U.get_placeholder(name="aux_rewardclass_gt", dtype=tf.float32, shape=[sequence_length] + [2])
+            #aux_r_tensor = W.dense_wn(x, 2, "aux_reward_sign_logits", wn_init=self.wn_init)
+            #self.aux_rewardclass_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(aux_r_tensor, self.aux_rewardclass_gt))
+            #self.aux_rewardclass_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(aux_r_tensor, 1), tf.argmax(self.aux_rewardclass_gt, 1)), tf.float32))
+            #tf.summary.scalar('aux_rewardclass_loss', self.aux_rewardclass_loss)
+            #tf.summary.scalar('aux_rewardclass_accuracy', 100*self.aux_rewardclass_accuracy)
 
             # action pd
             if isinstance(ac_space, gym.spaces.Box):
-                mean = U.dense(self.preaction, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
+                mean = U.dense(self.pre_action, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
                 pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 0.2 + 0.0*logstd ], axis=1)
@@ -224,7 +247,7 @@ def policy_fn(name, env, data_init=False):
                 # -2.3 => 0.1
             else:
                 bug()
-                pdparam = U.dense(self.preaction, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
+                pdparam = U.dense(self.pre_action, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
             self.pd = pdtype.pdfromflat(pdparam)
 
             # ---
@@ -242,7 +265,9 @@ def policy_fn(name, env, data_init=False):
         def get_variables(self):
             return self.trainable
         def get_trainable_variables(self):
-            return self.trainable
+            return [v for v in self.trainable if v.name.find('/crazy')==-1]
+        def get_crazy_variables(self):
+            return [v for v in self.trainable if v.name.find('/crazy')!=-1]
         def get_initial_state(self):
             return []
         def load(self, fn):
@@ -251,9 +276,9 @@ def policy_fn(name, env, data_init=False):
             saver.restore(tf.get_default_session(), 'models/%s' % fn)
             sys.stdout.flush()
         def save(self, fn):
-            print("SAVE\ntrainable:")
+            print("SAVE '%s'" % fn)
             for v in self.trainable:
-                print("\t'%s'" % v.name)
+                print("\tsave '%s'" % v.name)
             saver = tf.train.Saver(var_list=self.trainable)
             saver.save(tf.get_default_session(), 'models/%s' % fn)
 
@@ -268,12 +293,13 @@ def policy_fn(name, env, data_init=False):
         other_pi = ModifiedPolicy(name="pi", ob_space=ob_space, ac_space=ac_space, oldschool=True, **policy_kwargs)
         U.initialize()
         other_pi.load("aux01_196_3")
+        other_env.experiment("aux01_196_3", playback=True)
+        #other_env.step_value_per_frame[0] = 1.4
 
         SAMPLES_DATA_INIT = 640*1000
         BATCH = 128
         xp = ExperienceGenerator(other_env, SAMPLES_DATA_INIT, BATCH)
         xp.gather_experience(other_pi)
-        print("Mean reward of %i episodes: %0.1f" % (xp.total_episodes, xp.total_reward / xp.total_episodes))
 
         ob, a, obn, r, rsign = xp.next_batch()
         pi.wn_init.data_based_initialization({ pi.ob: ob })
@@ -284,19 +310,20 @@ def policy_fn(name, env, data_init=False):
         with tf.variable_scope("reward_supervised_train"):
             placeholder_reward_gt = tf.placeholder(dtype=tf.float32, shape=[BATCH,2], name="reward_gt")
             placeholder_xp_a = tf.placeholder(dtype=tf.float32, shape=[BATCH,env.action_space.shape[0]], name="xp_a")
-            preaction_concat_xp_action = U.concatenate([placeholder_xp_a, pi.preaction], axis=1)
-            x = tf.nn.relu( U.dense(preaction_concat_xp_action, 32, "crazy_reward_nonlin") )
+            crazy_concat_xp_action = U.concatenate([placeholder_xp_a, pi.crazy_final], axis=1)
+            x = tf.nn.relu( U.dense(crazy_concat_xp_action, 32, "crazy_reward_nonlin") )
             reward_approx = U.dense(x, 2, "crazy_reward_2way")
             reward_gt = tf.placeholder(dtype=tf.float32, shape=[BATCH,2])
             #batch_of_losses = tf.reduce_sum(tf.square(placeholder_reward_gt-reward_approx), axis=[1])
             #print("batch_of_losses", batch_of_losses.get_shape().as_list())
             #reward_loss = tf.reduce_mean(batch_of_losses)
             reward_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(reward_approx, placeholder_reward_gt))
-            reward_trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
-            for v in pi.trainable + reward_trainable:
+            trainable  = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+            trainable += pi.get_crazy_variables()
+            for v in trainable:
                 print("\tREW '%s'" % v.name)
-            reward_adam = tf.train.AdamOptimizer(0.0005, beta1=0.5).minimize(reward_loss, var_list=pi.trainable + reward_trainable)
-            #reward_adam = tf.train.GradientDescentOptimizer(0.0005).minimize(reward_loss, var_list=pi.trainable + reward_trainable)
+            reward_adam = tf.train.AdamOptimizer(0.0005, beta1=0.5).minimize(reward_loss, var_list=trainable)
+            #reward_adam = tf.train.GradientDescentOptimizer(0.0005).minimize(reward_loss, var_list=)
         tf.summary.scalar('reward_loss', reward_loss)
         #tf.summary.image("reward_diff", (ob).reshape([1,SAMPLES_DATA_INIT] + list(ob_space.shape) + [1]))
         U.initialize()
@@ -314,7 +341,7 @@ def policy_fn(name, env, data_init=False):
                 placeholder_reward_gt: rsign
                 } )
             train_writer.add_summary(summary, i)
-        print("Learned in %i epochs:", xp.epoch)
+        print("Learned in %i epochs:" % xp.epoch)
         dump_me = tf.get_default_session().run(reward_approx, feed_dict={ pi.ob: ob, placeholder_xp_a: a })
         for i in range(20):
             print("step %i real %0.3f predicted [%0.3f,%0.3f]" % (i, r[i], dump_me[i,0], dump_me[i,1]), flush=True)
@@ -333,6 +360,25 @@ def policy_fn(name, env, data_init=False):
         data_init_func(train_writer, test_writer)
         train_writer.close()
         test_writer.close()
+
+    n_params = np.zeros(1, dtype=np.int32)
+    if rank==0:
+        all_theta = pi.getflat()
+        n_params[0] = all_theta.shape[0]
+        print("transmetted total parameters shape %s" % n_params, flush=True)
+        MPI.COMM_WORLD.Bcast(n_params, root=0)
+    else:
+        MPI.COMM_WORLD.Bcast(n_params, root=0)
+        print("received[%i] = total parameters shape %s" % (rank, n_params), flush=True)
+
+    if rank==0:
+        MPI.COMM_WORLD.Bcast(all_theta, root=0)
+        print("transmitted[%i] = first is %s mean %s std %s" % (rank, str(all_theta[0:3]), all_theta.mean(), all_theta.std()), flush=True)
+    else:
+        all_theta = np.zeros(n_params[0], dtype=np.float32)
+        MPI.COMM_WORLD.Bcast(all_theta, root=0)
+        pi.setfromflat(all_theta)
+        print("received[%i] = first is %s mean %s std %s" % (rank, str(all_theta[0:3]), all_theta.mean(), all_theta.std()), flush=True)
 
     return pi
 
