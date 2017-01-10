@@ -1,7 +1,12 @@
 import os, sys, subprocess, time
+from mpi4py import MPI
+rank = MPI.COMM_WORLD.Get_rank()
+if rank!=0:
+    os.environ['CUDA_VISIBLE_DEVICES'] = ""
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3"
 import numpy as np
+from tqdm import tqdm
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
 
 import tinkerbell.logger as logger
@@ -11,8 +16,6 @@ from rl_algs import pposgd
 #from rl_algs.sandbox.hoj.common import logx as logger
 #import rl_algs.sandbox.oleg.evolution
 
-from mpi4py import MPI
-rank = MPI.COMM_WORLD.Get_rank()
 num_cpu = 8
 
 import gym
@@ -23,7 +26,7 @@ skip_wrap = lambda x: x
 
 env_id = sys.argv[1]
 experiment = sys.argv[2]
-max_timesteps = 1000000
+max_timesteps = 16000000 if env_id=='CommandWalker-v0' else 2000000
 
 if len(sys.argv)>3:
     demo = sys.argv[3]=="demo"
@@ -51,6 +54,77 @@ if env_id=='CommandWalker-v0':
         entry_point='command_walker:CommandWalker',
         timestep_limit=700,
         )
+
+
+# --------------------------------- xp -------------------------------------
+
+class ExperienceGenerator:
+    def __init__(self, env, REPLAY_BUFFER_DEPTH, BATCH):
+        self.env = env
+        self.REPLAY_BUFFER_DEPTH = REPLAY_BUFFER_DEPTH
+        self.BATCH = BATCH
+
+    def reopen(self, mode):
+        #self.ob    = np.zeros( [REPLAY_BUFFER_DEPTH] + list(env.observation_space.shape), dtype=np.float32 )
+        self.ob    = np.memmap("ramdisk/%s_mmap_ob" % env_id, mode=mode, shape=[REPLAY_BUFFER_DEPTH] + list(env.observation_space.shape), dtype=np.float32)
+        assert len(env.action_space.shape)==1
+        #self.a     = np.zeros( [REPLAY_BUFFER_DEPTH,env.action_space.shape[0]], dtype=np.float32 )
+        self.a     = np.memmap("ramdisk/%s_mmap_a" % env_id, mode=mode, shape=[REPLAY_BUFFER_DEPTH,env.action_space.shape[0]], dtype=np.float32)
+        #self.obn   = np.zeros( [REPLAY_BUFFER_DEPTH] + list(env.observation_space.shape), dtype=np.float32 )
+        self.obn   = np.memmap("ramdisk/%s_mmap_obn" % env_id, mode=mode, shape=[REPLAY_BUFFER_DEPTH] + list(env.observation_space.shape), dtype=np.float32)
+        #self.r     = np.zeros( [REPLAY_BUFFER_DEPTH,1], dtype=np.float32 )
+        self.r     = np.memmap("ramdisk/%s_mmap_r" % env_id, mode=mode, shape=[REPLAY_BUFFER_DEPTH,1], dtype=np.float32)
+        self.rsign = np.zeros( [REPLAY_BUFFER_DEPTH,2], dtype=np.float32 )
+        self.total_reward = 0.0
+        self.total_episodes = 0
+        self.cursor = 2**31
+        self.epoch = 0
+
+    def gather_experience(self, policy, force_rerun=False):
+        try:
+            xp.export_viz_open(dir_jpeg, "r+")
+        except:
+            force_rerun = True
+            xp.export_viz_open(dir_jpeg, "w+")
+        if force_rerun:
+            self.run_a_lot_of_rollouts(policy)
+        for i in range(self.REPLAY_BUFFER_DEPTH):
+            self.rsign[i,0] = 1 if self.r[i,0]<0 else 0
+            self.rsign[i,1] = 0 if self.r[i,0]<0 else 1
+
+    def run_a_lot_of_rollouts(self, policy):
+        done = True
+        for i in tqdm(range(self.REPLAY_BUFFER_DEPTH)):
+            if done:
+                ob = self.env.reset()
+                done = False
+                self.total_episodes += 1
+            a, _  = policy.act(1, ob)
+            self.a[i] = a
+            self.ob[i] = ob
+            ob, r, done, _ = self.env.step(a)
+            self.obn[i] = ob
+            self.r[i] = r
+            self.total_reward += r
+
+    def next_batch(self):
+        if self.cursor+self.BATCH > self.REPLAY_BUFFER_DEPTH:
+            sh = np.random.choice(self.REPLAY_BUFFER_DEPTH, size=self.REPLAY_BUFFER_DEPTH, replace=False)   # sh is list of indexes
+            self.shuffled_ob    = self.ob[sh]
+            self.shuffled_a     = self.a[sh]
+            self.shuffled_obn   = self.obn[sh]
+            self.shuffled_r     = self.r[sh]
+            self.shuffled_rsign = self.rsign[sh]
+            self.cursor = 0
+            self.epoch += 1
+        ret = (
+            self.shuffled_ob[   self.cursor : self.cursor+self.BATCH],
+            self.shuffled_a[    self.cursor : self.cursor+self.BATCH],
+            self.shuffled_obn[  self.cursor : self.cursor+self.BATCH],
+            self.shuffled_r[    self.cursor : self.cursor+self.BATCH],
+            self.shuffled_rsign[self.cursor : self.cursor+self.BATCH])
+        self.cursor += self.BATCH
+        return ret
 
 
 # ------------------------------- network ----------------------------------
@@ -122,12 +196,8 @@ def policy_fn(name, env, data_init=False):
                 skip4 = x
                 x = tf.nn.relu( W.dense_wn(x,  64, "crazy4", wn_init=self.wn_init) )
                 skip5 = x
-                x = tf.nn.relu( W.dense_wn(x,  32, "crazy5", wn_init=self.wn_init) )
-                skip6 = x
-                x = tf.nn.relu( W.dense_wn(x,  32, "crazy6", wn_init=self.wn_init) )
-                skip7 = x
                 #self.preaction = U.concatenate( [skip1,skip2,skip3,skip4,skip5,skip6,skip7], axis=1 )
-                self.preaction = skip7
+                self.preaction = x
                 print("preaction shape", self.preaction.get_shape().as_list())
                 self.vpredz = W.dense_wn(self.preaction, 1, "crazy_v")[:,0]
                 self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
@@ -144,9 +214,10 @@ def policy_fn(name, env, data_init=False):
                 mean = U.dense(self.preaction, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
                 logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
                 #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
-                pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 1.0 + 0.0*logstd ], axis=1)
+                pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 0.2 + 0.0*logstd ], axis=1)
                 # -0.2 => 0.8 (works for ppo/walking)
                 # -0.5 => 0.6
+                # -1.0        best for Lander
                 # -1.6 => 0.2 (works for evolution)
                 # -2.3 => 0.1
             else:
@@ -190,64 +261,61 @@ def policy_fn(name, env, data_init=False):
     U.initialize()
 
     def data_init_func(train_writer, test_writer):
+        print("Data init of %s" % name)
         other_env = gym.make(env_id)
         other_pi = ModifiedPolicy(name="pi", ob_space=ob_space, ac_space=ac_space, oldschool=True, **policy_kwargs)
         U.initialize()
-        other_pi.load("ret_rms00_dummy")
+        other_pi.load("aux01_196_3")
 
-        SAMPLES_DATA_INIT = 5000
-        observation_batch = np.zeros( [SAMPLES_DATA_INIT] + list(ob_space.shape), dtype=np.float32 )
-        reward_batch = np.zeros( [SAMPLES_DATA_INIT,1] )
-        print("Data init of %s" % name)
-        from tqdm import tqdm
-        done = True
-        stat_reward = 0.0
-        episode = 0
-        for i in tqdm(range(SAMPLES_DATA_INIT)):
-            if done:
-                ob = other_env.reset()
-                done = False
-                episode += 1
-            a, _  = other_pi.act(1, ob)
-            ob, r, done, _ = other_env.step(a)
-            stat_reward += r
-            observation_batch[i] = ob
-            if r==100: r = 0
-            reward_batch[i,0] = r
-        print("Mean reward of %i episodes: %0.1f" % (episode, stat_reward / episode))
-        pi.wn_init.data_based_initialization({ pi.ob: observation_batch })
+        SAMPLES_DATA_INIT = 640*1000
+        BATCH = 128
+        xp = ExperienceGenerator(other_env, SAMPLES_DATA_INIT, BATCH)
+        xp.gather_experience(other_pi)
+        print("Mean reward of %i episodes: %0.1f" % (xp.total_episodes, xp.total_reward / xp.total_episodes))
+
+        ob, a, obn, r, rsign = xp.next_batch()
+        pi.wn_init.data_based_initialization({ pi.ob: ob })
         pi.wn_init.dump_to_tf_summary()
-        tf.summary.image("observation_batch", observation_batch.reshape([1,SAMPLES_DATA_INIT] + list(ob_space.shape) + [1]))
+        #tf.summary.image("observation_batch", pi.ob.reshape([1,SAMPLES_DATA_INIT] + list(ob_space.shape) + [1]))
 
-        print("reward_batch", reward_batch)
         print("Supervised reward train:")
         with tf.variable_scope("reward_supervised_train"):
-            reward_approx = U.dense(pi.preaction, 1, "crazy_reward")
-            reward_gt = tf.placeholder(dtype=tf.float32, shape=[SAMPLES_DATA_INIT,1])
-            batch_of_losses = tf.reduce_sum(tf.square(reward_gt-reward_approx), axis=[1])
-            print("batch_of_losses", batch_of_losses.get_shape().as_list())
-            reward_loss = tf.reduce_mean(batch_of_losses)
+            placeholder_reward_gt = tf.placeholder(dtype=tf.float32, shape=[BATCH,2], name="reward_gt")
+            placeholder_xp_a = tf.placeholder(dtype=tf.float32, shape=[BATCH,env.action_space.shape[0]], name="xp_a")
+            preaction_concat_xp_action = U.concatenate([placeholder_xp_a, pi.preaction], axis=1)
+            x = tf.nn.relu( U.dense(preaction_concat_xp_action, 32, "crazy_reward_nonlin") )
+            reward_approx = U.dense(x, 2, "crazy_reward_2way")
+            reward_gt = tf.placeholder(dtype=tf.float32, shape=[BATCH,2])
+            #batch_of_losses = tf.reduce_sum(tf.square(placeholder_reward_gt-reward_approx), axis=[1])
+            #print("batch_of_losses", batch_of_losses.get_shape().as_list())
+            #reward_loss = tf.reduce_mean(batch_of_losses)
+            reward_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(reward_approx, placeholder_reward_gt))
             reward_trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
             for v in pi.trainable + reward_trainable:
                 print("\tREW '%s'" % v.name)
             reward_adam = tf.train.AdamOptimizer(0.0005, beta1=0.5).minimize(reward_loss, var_list=pi.trainable + reward_trainable)
             #reward_adam = tf.train.GradientDescentOptimizer(0.0005).minimize(reward_loss, var_list=pi.trainable + reward_trainable)
         tf.summary.scalar('reward_loss', reward_loss)
-        #tf.summary.image("reward_diff", (observation_batch).reshape([1,SAMPLES_DATA_INIT] + list(ob_space.shape) + [1]))
+        #tf.summary.image("reward_diff", (ob).reshape([1,SAMPLES_DATA_INIT] + list(ob_space.shape) + [1]))
         U.initialize()
         merged = tf.summary.merge_all()
 
         print("Unlearned:")
-        dump_me = tf.get_default_session().run(reward_approx, feed_dict={ pi.ob: observation_batch })
-        for i in range(100):
-            print("step %i real %0.3f predicted %0.3f" % (i, reward_batch[i], dump_me[i]), flush=True)
-        for i in tqdm(range(300)):
-            summary,a,b = tf.get_default_session().run( [merged,reward_adam,reward_loss], feed_dict={ pi.ob: observation_batch, reward_gt: reward_batch } )
+        dump_me = tf.get_default_session().run(reward_approx, feed_dict={ pi.ob: ob, placeholder_xp_a: a })
+        for i in range(20):
+            print("step %i real %0.3f predicted [%0.3f,%0.3f]" % (i, r[i], dump_me[i,0], dump_me[i,1]), flush=True)
+        for i in tqdm(range(50000)):
+            ob, a, obn, r, rsign = xp.next_batch()
+            summary,_,loss = tf.get_default_session().run( [merged,reward_adam,reward_loss], feed_dict={
+                placeholder_xp_a: a,
+                pi.ob: ob,
+                placeholder_reward_gt: rsign
+                } )
             train_writer.add_summary(summary, i)
-        print("Learned:")
-        dump_me = tf.get_default_session().run(reward_approx, feed_dict={ pi.ob: observation_batch })
-        for i in range(100):
-            print("step %i real %0.3f predicted %0.3f" % (i, reward_batch[i], dump_me[i]), flush=True)
+        print("Learned in %i epochs:", xp.epoch)
+        dump_me = tf.get_default_session().run(reward_approx, feed_dict={ pi.ob: ob, placeholder_xp_a: a })
+        for i in range(20):
+            print("step %i real %0.3f predicted [%0.3f,%0.3f]" % (i, r[i], dump_me[i,0], dump_me[i,1]), flush=True)
 
     if data_init and rank==0:
         LOG_DIR = "ramdisk/"
