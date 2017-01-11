@@ -105,22 +105,25 @@ class ExperienceGenerator:
 
     def run_a_lot_of_rollouts(self, policy):
         done = True
+        ts = 0
         score = 0.0
         for i in tqdm(range(self.REPLAY_BUFFER_DEPTH)):
-            if done:
+            if done or ts > self.env.spec.timestep_limit // 2:
                 ob = self.env.reset()
                 print("RESET %0.1f" % score, flush=True)
                 done = False
                 self.total_episodes += 1
+                ts = 0
                 score = 0.0
+            self.ob[i] = ob
             a, _  = policy.act(1, ob)
             self.a[i] = a
-            self.ob[i] = ob
             ob, r, done, _ = self.env.step(a)
             self.obn[i] = ob
             self.r[i] = r
             self.total_reward += r
             score += r
+            ts += 1
 
     def next_batch(self):
         if self.cursor+self.BATCH > self.REPLAY_BUFFER_DEPTH:
@@ -149,7 +152,7 @@ policy_kwargs = dict(
     num_hid_layers=2
     )
 
-def policy_fn(name, env, data_init=False):
+def policy_fn(name, env, data_init=False, oldschool=False):
     class ModifiedPolicy(object):
         recurrent = False
 
@@ -190,6 +193,7 @@ def policy_fn(name, env, data_init=False):
             if oldschool:
                 # value est
                 x = ob
+                self.arrays.append( ("ob", ob) )
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
                 self.pre_value = x
@@ -198,30 +202,31 @@ def policy_fn(name, env, data_init=False):
                 x = ob
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                    self.arrays.append( ("polfc%i"%(i+1), x) )
                 self.pre_action = x
 
             else:
                 self.wn_init = W.WeightNormInitializer()
                 x = ob
                 self.arrays.append( ("ob", ob) )
-                x = tf.nn.relu( W.dense_wn(x,  96, "crazy1", wn_init=self.wn_init) )
+                x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
                 skip1 = x
                 self.arrays.append( ("crazy1", x) )
-                x = tf.nn.relu( W.dense_wn(x,  64, "crazy2", wn_init=self.wn_init) )
-                skip2 = x
-                self.arrays.append( ("crazy2", x) )
-                x = tf.nn.relu( W.dense_wn(x,  64, "crazy3", wn_init=self.wn_init) )
+#                x = tf.nn.relu( W.dense_wn(x,  48, "crazy2", wn_init=self.wn_init) )
+#                skip2 = x
+#                self.arrays.append( ("crazy2", x) )
+                x = tf.nn.relu( W.dense_wn(x,  48, "crazy3", wn_init=self.wn_init) )
                 skip3 = x
                 self.arrays.append( ("crazy3", x) )
                 self.crazy_final = x
 
-                x = U.concatenate([ob,skip2,skip3], axis=1)
+                x = U.concatenate([ob,skip3], axis=1)
                 self.arrays.append( ("concat_ob_crazy", x) )
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
                 self.pre_value = x
 
-                x = U.concatenate([ob,skip2,skip3], axis=1)
+                x = U.concatenate([ob,skip3], axis=1)
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
                     self.arrays.append( ("polfc%i"%(i+1), x) )
@@ -291,7 +296,7 @@ def policy_fn(name, env, data_init=False):
 
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, oldschool=False, **policy_kwargs)
+    pi = ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, oldschool=oldschool, **policy_kwargs)
     U.initialize()
 
     def data_init_func(train_writer, test_writer):
@@ -304,7 +309,7 @@ def policy_fn(name, env, data_init=False):
         #other_env.step_value_per_frame[0] = 1.4
 
         SAMPLES_DATA_INIT = 640*1000
-        BATCH = 128
+        BATCH = 512
         xp = ExperienceGenerator(other_env, SAMPLES_DATA_INIT, BATCH)
         xp.gather_experience(other_pi)
 
@@ -325,13 +330,15 @@ def policy_fn(name, env, data_init=False):
             #print("batch_of_losses", batch_of_losses.get_shape().as_list())
             #reward_loss = tf.reduce_mean(batch_of_losses)
             reward_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(reward_approx, placeholder_reward_gt))
+            reward_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(reward_approx, 1), tf.argmax(placeholder_reward_gt, 1)), tf.float32))
             trainable  = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
             trainable += pi.get_crazy_variables()
             for v in trainable:
                 print("\tREW '%s'" % v.name)
-            reward_adam = tf.train.AdamOptimizer(0.0005, beta1=0.5).minimize(reward_loss, var_list=trainable)
+            reward_adam = tf.train.AdamOptimizer(0.005, beta1=0.5).minimize(reward_loss, var_list=trainable)
             #reward_adam = tf.train.GradientDescentOptimizer(0.0005).minimize(reward_loss, var_list=)
         tf.summary.scalar('reward_loss', reward_loss)
+        tf.summary.scalar('reward_accuracy', reward_accuracy)
         #tf.summary.image("reward_diff", (ob).reshape([1,SAMPLES_DATA_INIT] + list(ob_space.shape) + [1]))
         U.initialize()
         merged = tf.summary.merge_all()
@@ -496,7 +503,8 @@ else:
     #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = policy_fn("newpi", env)
+    pi = policy_fn("pi", env, oldschool=True)
+    #pi = policy_fn("newpi", env, oldschool=False)
 
     human_sets_pause = False
     from pyglet.window import key as kk

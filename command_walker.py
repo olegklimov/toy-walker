@@ -160,6 +160,7 @@ class CommandWalker(gym.Env):
         self.terrain = None
         self.hull = None
 
+        self.STATE_FOR_PREDICTION = 14
         self._reset()
 
         high = np.array([np.inf]*39)
@@ -582,14 +583,16 @@ class CommandWalker(gym.Env):
             self.joints[2].speed / SPEED_HIP,
             self.joints[3].angle + 1.0,
             self.joints[3].speed / SPEED_KNEE,
-            1.0 if self.legs[1].ground_contact>0 else 0.0,
+            1.0 if self.legs[1].ground_contact>0 else 0.0]
+        assert(len(state)==self.STATE_FOR_PREDICTION)
+        command = [
             (self.target[0] - self.hull.position[0]) / MAX_TARG_STEP,
             (self.target[1] - self.hull.position[0]) / MAX_TARG_STEP,
             self.external_command,
             self.hull_desired_position,
             1 if self.jump>0 else 0
             ]
-        state += [l.fraction for l in self.lidar]
+        state = state + command + [l.fraction for l in self.lidar]
         assert len(state)==39
 
         self.scroll = pos.x - VIEWPORT_W/SCALE/2
