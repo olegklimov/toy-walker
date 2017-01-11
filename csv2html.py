@@ -38,7 +38,7 @@ html2 = """
         hAxis: {
             viewWindow: {
                 min: 0,
-                max: 2000000
+                max: 16000000
             }
         },
         vAxes: {
@@ -53,7 +53,7 @@ html2 = """
             2: {
                 gridlines: { count: 0 },
                 minValue: 0,
-                maxValue: 3600
+                maxValue: 3*3600
             }
         }
       };

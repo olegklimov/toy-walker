@@ -19,7 +19,7 @@ import rl_algs.common.tf_weightnorm as W
 from rl_algs.common.distributions import make_pdtype
 from rl_algs.common.mpi_running_mean_std import RunningMeanStd
 
-num_cpu = 8
+num_cpu = 4
 
 import gym
 from gym.envs.registration import register
@@ -152,7 +152,7 @@ policy_kwargs = dict(
     num_hid_layers=2
     )
 
-def policy_fn(name, env, data_init=False, oldschool=False):
+def policy_fn(name, env, data_init=False, supervised_part=False, oldschool=False):
     class ModifiedPolicy(object):
         recurrent = False
 
@@ -160,16 +160,17 @@ def policy_fn(name, env, data_init=False, oldschool=False):
             with tf.variable_scope(name):
                 self._init(*args, **kwargs)
                 self.trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
-            print("Policy summary:")
-            for v in self.get_trainable_variables():
-                print("\ttrainable: '%s' (%i params)" % (v.name, U.numel(v)))
-            for v in self.get_crazy_variables():
-                print("\tsupervized: '%s' (%i params)" % (v.name, U.numel(v)))
+            if rank==0:
+                print("Policy summary:")
+                for v in self.get_trainable_variables():
+                    print("\ttrainable: '%s' (%i params)" % (v.name, U.numel(v)))
+                for v in self.get_crazy_variables():
+                    print("\tsupervized: '%s' (%i params)" % (v.name, U.numel(v)))
 
             self.setfromflat = U.SetFromFlat(self.trainable)
             self.getflat = U.GetFlat(self.trainable)
 
-        def _init(self, ob_space, ac_space, hid_size, num_hid_layers, oldschool):
+        def _init(self, ob_space, ac_space, hid_size, num_hid_layers, oldschool, supervised_part):
             assert isinstance(ob_space, gym.spaces.Box)
 
             self.pdtype = pdtype = make_pdtype(ac_space)
@@ -207,30 +208,46 @@ def policy_fn(name, env, data_init=False, oldschool=False):
 
             else:
                 self.wn_init = W.WeightNormInitializer()
-                x = ob
-                self.arrays.append( ("ob", ob) )
-                x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
-                skip1 = x
-                self.arrays.append( ("crazy1", x) )
-#                x = tf.nn.relu( W.dense_wn(x,  48, "crazy2", wn_init=self.wn_init) )
-#                skip2 = x
-#                self.arrays.append( ("crazy2", x) )
-                x = tf.nn.relu( W.dense_wn(x,  48, "crazy3", wn_init=self.wn_init) )
-                skip3 = x
-                self.arrays.append( ("crazy3", x) )
-                self.crazy_final = x
 
-                x = U.concatenate([ob,skip3], axis=1)
-                self.arrays.append( ("concat_ob_crazy", x) )
-                for i in range(num_hid_layers):
-                    x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
-                self.pre_value = x
+                if supervised_part:
+                    x = ob
+                    self.arrays.append( ("ob", ob) )
+                    x = tf.nn.relu( U.dense(x,  48, "crazy1") )
+                    #x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
+                    skip1 = x
+                    self.arrays.append( ("crazy1", x) )
+                    #x = tf.nn.relu( W.dense_wn(x,  48, "crazy2", wn_init=self.wn_init) )
+                    #skip2 = x
+                    #self.arrays.append( ("crazy2", x) )
+                    x = tf.nn.relu( U.dense(x,  48, "crazy3") )
+                    #x = tf.nn.relu( W.dense_wn(x,  48, "crazy3", wn_init=self.wn_init) )
+                    skip3 = x
+                    self.arrays.append( ("crazy3", x) )
+                    self.crazy_final = x
 
-                x = U.concatenate([ob,skip3], axis=1)
-                for i in range(num_hid_layers):
-                    x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
-                    self.arrays.append( ("polfc%i"%(i+1), x) )
-                self.pre_action = x
+                    x = U.concatenate([ob,skip3], axis=1)
+                    self.arrays.append( ("concat_ob_crazy", x) )
+                    for i in range(num_hid_layers):
+                        x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                    self.pre_value = x
+
+                    x = U.concatenate([ob,skip3], axis=1)
+                    for i in range(num_hid_layers):
+                        x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                        self.arrays.append( ("polfc%i"%(i+1), x) )
+                    self.pre_action = x
+
+                else:
+                    x = ob
+                    self.arrays.append( ("ob", ob) )
+                    x = tf.nn.relu( W.dense_wn(x, 192, "silly1", wn_init=self.wn_init) )
+                    self.arrays.append( ("crazy1", x) )
+                    x = tf.nn.relu( W.dense_wn(x, 128, "silly2", wn_init=self.wn_init) )
+                    self.arrays.append( ("silly2", x) )
+                    x = tf.nn.relu( W.dense_wn(x, 128, "silly3", wn_init=self.wn_init) )
+                    self.arrays.append( ("silly3", x) )
+                    self.pre_value = x
+                    self.pre_action = x
 
                 print("pre value shape", self.pre_value.get_shape().as_list())
                 print("pre action shape", self.pre_action.get_shape().as_list())
@@ -296,18 +313,10 @@ def policy_fn(name, env, data_init=False, oldschool=False):
 
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, oldschool=oldschool, **policy_kwargs)
+    pi = ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, oldschool=oldschool, supervised_part=supervised_part, **policy_kwargs)
     U.initialize()
 
-    def data_init_func(train_writer, test_writer):
-        print("Data init of %s" % name)
-        other_env = gym.make(env_id)
-        other_pi = ModifiedPolicy(name="pi", ob_space=ob_space, ac_space=ac_space, oldschool=True, **policy_kwargs)
-        U.initialize()
-        other_pi.load("aux01_196_3")
-        other_env.experiment("aux01_196_3", playback=True)
-        #other_env.step_value_per_frame[0] = 1.4
-
+    def supervised_part_func():
         SAMPLES_DATA_INIT = 640*1000
         BATCH = 512
         xp = ExperienceGenerator(other_env, SAMPLES_DATA_INIT, BATCH)
@@ -360,6 +369,17 @@ def policy_fn(name, env, data_init=False, oldschool=False):
         for i in range(20):
             print("step %i real %0.3f predicted [%0.3f,%0.3f]" % (i, r[i], dump_me[i,0], dump_me[i,1]), flush=True)
 
+    def data_init_func(train_writer, test_writer):
+        print("Data init of %s" % name)
+        other_env = gym.make(env_id)
+        other_pi = ModifiedPolicy(name="pi", ob_space=ob_space, ac_space=ac_space, oldschool=True, supervised_part=False, **policy_kwargs)
+        U.initialize()
+        other_pi.load("aux01_196_3")
+        other_env.experiment("aux01_196_3", playback=True)
+        #other_env.step_value_per_frame[0] = 1.4
+        if supervised_part:
+            supervised_part_func()
+
     if data_init and rank==0:
         LOG_DIR = "ramdisk/"
         import os, shutil
@@ -402,11 +422,11 @@ def policy_fn(name, env, data_init=False, oldschool=False):
 if not demo and not manual:
     def train():
         learn_kwargs = dict(
-            timesteps_per_batch=1024, # horizon
+            timesteps_per_batch=2048, # horizon
             max_kl=0.03, clip_param=0.2, entcoeff=0.00, # objective
             #klcoeff=0.01, adapt_kl=0,
             klcoeff=0.001, adapt_kl=0.03,
-            optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=64, linesearch=True, # optimization
+            optim_epochs=10, optim_stepsize=3e-4, optim_batchsize=128, linesearch=True, # optimization
             gamma=0.99, lam=0.95, # advantage estimation (try lambda .99)
             )
         # optim_epochs 24 => good
@@ -503,7 +523,8 @@ else:
     #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = policy_fn("pi", env, oldschool=True)
+    #pi = policy_fn("pi", env, oldschool=True, supervised_part=True)
+    pi = policy_fn("newpi", env, oldschool=False, supervised_part=False)
     #pi = policy_fn("newpi", env, oldschool=False)
 
     human_sets_pause = False
