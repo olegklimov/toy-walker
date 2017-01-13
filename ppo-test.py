@@ -152,167 +152,171 @@ policy_kwargs = dict(
     num_hid_layers=2
     )
 
-def policy_fn(name, env, data_init=False, supervised_part=False, oldschool=False):
-    class ModifiedPolicy(object):
-        recurrent = False
+class ModifiedPolicy(object):
+    recurrent = False
 
-        def __init__(self, name, *args, **kwargs):
-            with tf.variable_scope(name):
-                self._init(*args, **kwargs)
-                self.trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
-            if rank==0:
-                print("Policy summary:")
-                for v in self.get_trainable_variables():
-                    print("\ttrainable: '%s' (%i params)" % (v.name, U.numel(v)))
-                for v in self.get_crazy_variables():
-                    print("\tsupervized: '%s' (%i params)" % (v.name, U.numel(v)))
+    def __init__(self, name, *args, **kwargs):
+        self.name = name
+        with tf.variable_scope(name):
+            self._init(*args, **kwargs)
+            self.trainable = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+        if rank==0:
+            print("Policy summary:")
+            for v in self.get_trainable_variables():
+                print("\ttrainable: '%s' (%i params)" % (v.name, U.numel(v)))
+            for v in self.get_crazy_variables():
+                print("\tsupervized: '%s' (%i params)" % (v.name, U.numel(v)))
 
-            self.setfromflat = U.SetFromFlat(self.trainable)
-            self.getflat = U.GetFlat(self.trainable)
+        self.setfromflat = U.SetFromFlat(self.trainable)
+        self.getflat = U.GetFlat(self.trainable)
 
-        def _init(self, ob_space, ac_space, hid_size, num_hid_layers, oldschool, supervised_part):
-            assert isinstance(ob_space, gym.spaces.Box)
+    def _init(self, ob_space, ac_space, hid_size, num_hid_layers, oldschool, supervised_part):
+        assert isinstance(ob_space, gym.spaces.Box)
 
-            self.pdtype = pdtype = make_pdtype(ac_space)
-            sequence_length = None
+        self.pdtype = pdtype = make_pdtype(ac_space)
+        sequence_length = None
 
-            ob = U.get_placeholder(name="ob", dtype=tf.float32, shape=[sequence_length] + list(ob_space.shape))
-            self.ob = ob
+        ob = U.get_placeholder(name="ob", dtype=tf.float32, shape=[sequence_length] + list(ob_space.shape))
+        self.ob = ob
 
-            if True:
-                with tf.variable_scope("retfilter"):
-                    self.ret_rms = RunningMeanStd()
-            else:
-                class Dummy:
-                    def update(self, x):
-                        pass
-                self.ret_rms = Dummy()
-                self.ret_rms.mean = 0.0
-                self.ret_rms.std = 250.0
+        if True:
+            with tf.variable_scope("retfilter"):
+                self.ret_rms = RunningMeanStd()
+        else:
+            class Dummy:
+                def update(self, x):
+                    pass
+            self.ret_rms = Dummy()
+            self.ret_rms.mean = 0.0
+            self.ret_rms.std = 250.0
 
-            self.arrays = []
-            if oldschool:
-                # value est
+        self.arrays = []
+        if oldschool:
+            # value est
+            x = ob
+            self.arrays.append( ("ob", ob) )
+            for i in range(num_hid_layers):
+                x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+            self.pre_value = x
+
+            # action
+            x = ob
+            for i in range(num_hid_layers):
+                x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+                self.arrays.append( ("polfc%i"%(i+1), x) )
+            self.pre_action = x
+
+        else:
+            self.wn_init = W.WeightNormInitializer()
+
+            if supervised_part:
                 x = ob
                 self.arrays.append( ("ob", ob) )
+                x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
+                #x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
+                skip1 = x
+                self.arrays.append( ("crazy1", x) )
+                #x = tf.nn.relu( W.dense_wn(x,  48, "crazy2", wn_init=self.wn_init) )
+                #skip2 = x
+                #self.arrays.append( ("crazy2", x) )
+                x = tf.nn.relu( W.dense_wn(x,  48, "crazy3", wn_init=self.wn_init) )
+                skip3 = x
+                self.arrays.append( ("crazy3", x) )
+                self.crazy_final = x
+
+                x = U.concatenate([ob,skip3], axis=1)
+                self.arrays.append( ("concat_ob_crazy", x) )
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
                 self.pre_value = x
 
-                # action
-                x = ob
+                x = U.concatenate([ob,skip3], axis=1)
                 for i in range(num_hid_layers):
                     x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
                     self.arrays.append( ("polfc%i"%(i+1), x) )
                 self.pre_action = x
 
             else:
-                self.wn_init = W.WeightNormInitializer()
+                x = ob
+                self.arrays.append( ("ob", ob) )
+                #x = tf.nn.relu( W.dense_wn(x, 192, "wnfc1", wn_init=self.wn_init) )
+                x = tf.nn.relu( U.dense(x, 192, "fc1") )
+                self.arrays.append( ("fc1", x) )
+                #x = tf.nn.relu( W.dense_wn(x, 128, "wnfc2", wn_init=self.wn_init) )
+                x = tf.nn.relu( U.dense(x, 128, "fc2") )
+                self.arrays.append( ("fc2", x) )
+                #x = tf.nn.relu( W.dense_wn(x, 128, "wnfc3", wn_init=self.wn_init) )
+                x = tf.nn.relu( U.dense(x, 128, "fc3") )
+                self.arrays.append( ("fc3", x) )
+                self.pre_value = x
+                self.pre_action = x
 
-                if supervised_part:
-                    x = ob
-                    self.arrays.append( ("ob", ob) )
-                    x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
-                    #x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
-                    skip1 = x
-                    self.arrays.append( ("crazy1", x) )
-                    #x = tf.nn.relu( W.dense_wn(x,  48, "crazy2", wn_init=self.wn_init) )
-                    #skip2 = x
-                    #self.arrays.append( ("crazy2", x) )
-                    x = tf.nn.relu( W.dense_wn(x,  48, "crazy3", wn_init=self.wn_init) )
-                    skip3 = x
-                    self.arrays.append( ("crazy3", x) )
-                    self.crazy_final = x
+            print("pre value shape", self.pre_value.get_shape().as_list())
+            print("pre action shape", self.pre_action.get_shape().as_list())
 
-                    x = U.concatenate([ob,skip3], axis=1)
-                    self.arrays.append( ("concat_ob_crazy", x) )
-                    for i in range(num_hid_layers):
-                        x = tf.nn.relu(U.dense(x, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
-                    self.pre_value = x
+        self.vpredz = U.dense(self.pre_value, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
+        self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
 
-                    x = U.concatenate([ob,skip3], axis=1)
-                    for i in range(num_hid_layers):
-                        x = tf.nn.relu(U.dense(x, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
-                        self.arrays.append( ("polfc%i"%(i+1), x) )
-                    self.pre_action = x
+        #self.aux_rewardclass_gt = U.get_placeholder(name="aux_rewardclass_gt", dtype=tf.float32, shape=[sequence_length] + [2])
+        #aux_r_tensor = W.dense_wn(x, 2, "aux_reward_sign_logits", wn_init=self.wn_init)
+        #self.aux_rewardclass_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(aux_r_tensor, self.aux_rewardclass_gt))
+        #self.aux_rewardclass_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(aux_r_tensor, 1), tf.argmax(self.aux_rewardclass_gt, 1)), tf.float32))
+        #tf.summary.scalar('aux_rewardclass_loss', self.aux_rewardclass_loss)
+        #tf.summary.scalar('aux_rewardclass_accuracy', 100*self.aux_rewardclass_accuracy)
 
-                else:
-                    x = ob
-                    self.arrays.append( ("ob", ob) )
-                    #x = tf.nn.relu( W.dense_wn(x, 192, "wnfc1", wn_init=self.wn_init) )
-                    x = tf.nn.relu( U.dense(x, 192, "fc1") )
-                    self.arrays.append( ("fc1", x) )
-                    #x = tf.nn.relu( W.dense_wn(x, 128, "wnfc2", wn_init=self.wn_init) )
-                    x = tf.nn.relu( U.dense(x, 128, "fc2") )
-                    self.arrays.append( ("fc2", x) )
-                    #x = tf.nn.relu( W.dense_wn(x, 128, "wnfc3", wn_init=self.wn_init) )
-                    x = tf.nn.relu( U.dense(x, 128, "fc3") )
-                    self.arrays.append( ("fc3", x) )
-                    self.pre_value = x
-                    self.pre_action = x
+        # action pd
+        if isinstance(ac_space, gym.spaces.Box):
+            mean = U.dense(self.pre_action, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
+            self.arrays.append( ("mean", mean) )
+            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
+            #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
+            pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 0.2 + 0.0*logstd ], axis=1)
+            # -0.2 => 0.8 (works for ppo/walking)
+            # -0.5 => 0.6
+            # -1.0        best for Lander
+            # -1.6 => 0.2 (works for evolution)
+            # -2.3 => 0.1
+        else:
+            bug()
+            pdparam = U.dense(self.pre_action, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
+        self.pd = pdtype.pdfromflat(pdparam)
 
-                print("pre value shape", self.pre_value.get_shape().as_list())
-                print("pre action shape", self.pre_action.get_shape().as_list())
+        # ---
+        self.state_in = []
+        self.state_out = []
 
-            self.vpredz = U.dense(self.pre_value, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
-            self.vpred = self.vpredz * self.ret_rms.std + self.ret_rms.mean
+        self.stochastic = tf.placeholder(dtype=tf.bool, shape=())
+        ac = U.switch(self.stochastic, self.pd.sample(), self.pd.mode())
+        self._act = U.function([self.stochastic, ob], [ac, self.vpred])  #, logstd
+        self._act_unscaled = U.function([self.stochastic, ob], [ac, self.vpredz])
 
-            #self.aux_rewardclass_gt = U.get_placeholder(name="aux_rewardclass_gt", dtype=tf.float32, shape=[sequence_length] + [2])
-            #aux_r_tensor = W.dense_wn(x, 2, "aux_reward_sign_logits", wn_init=self.wn_init)
-            #self.aux_rewardclass_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(aux_r_tensor, self.aux_rewardclass_gt))
-            #self.aux_rewardclass_accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(aux_r_tensor, 1), tf.argmax(self.aux_rewardclass_gt, 1)), tf.float32))
-            #tf.summary.scalar('aux_rewardclass_loss', self.aux_rewardclass_loss)
-            #tf.summary.scalar('aux_rewardclass_accuracy', 100*self.aux_rewardclass_accuracy)
+    def act(self, stochastic, ob):
+        ac1, vpred1 =  self._act(stochastic, ob[None])
+        return ac1[0], vpred1[0]
+    def act_unscaled(self, stochastic, ob):
+        ac1, vpredz =  self._act_unscaled(0, ob[None])
+        return ac1[0], vpredz[0]
+    def get_variables(self):
+        return self.trainable
+    def get_trainable_variables(self):
+        return [v for v in self.trainable if v.name.find('/crazy')==-1]
+    def get_crazy_variables(self):
+        return [v for v in self.trainable if v.name.find('/crazy')!=-1]
+    def get_initial_state(self):
+        return []
+    def load(self, fn):
+        print("LOAD '%s'" % fn)
+        saver = tf.train.Saver(var_list=self.trainable)
+        saver.restore(tf.get_default_session(), 'models/%s' % fn)
+        sys.stdout.flush()
+    def save(self, fn):
+        print("SAVE '%s'" % fn)
+        for v in self.trainable:
+            print("\tsave '%s'" % v.name)
+        saver = tf.train.Saver(var_list=self.trainable)
+        saver.save(tf.get_default_session(), 'models/%s' % fn)
 
-            # action pd
-            if isinstance(ac_space, gym.spaces.Box):
-                mean = U.dense(self.pre_action, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
-                self.arrays.append( ("mean", mean) )
-                logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer)
-                #pdparam = U.concatenate([mean, mean * 0.0 + logstd], axis=1)
-                pdparam = U.concatenate([ 2.0*tf.nn.tanh(mean), mean * 0.0 - 0.2 + 0.0*logstd ], axis=1)
-                # -0.2 => 0.8 (works for ppo/walking)
-                # -0.5 => 0.6
-                # -1.0        best for Lander
-                # -1.6 => 0.2 (works for evolution)
-                # -2.3 => 0.1
-            else:
-                bug()
-                pdparam = U.dense(self.pre_action, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
-            self.pd = pdtype.pdfromflat(pdparam)
-
-            # ---
-            self.state_in = []
-            self.state_out = []
-
-            self.stochastic = tf.placeholder(dtype=tf.bool, shape=())
-            ac = U.switch(self.stochastic, self.pd.sample(), self.pd.mode())
-            self._act = U.function([self.stochastic, ob], [ac, self.vpred])  #, logstd
-
-        def act(self, stochastic, ob):
-            ac1, vpred1 =  self._act(stochastic, ob[None])
-            #print(std)
-            return ac1[0], vpred1[0]
-        def get_variables(self):
-            return self.trainable
-        def get_trainable_variables(self):
-            return [v for v in self.trainable if v.name.find('/crazy')==-1]
-        def get_crazy_variables(self):
-            return [v for v in self.trainable if v.name.find('/crazy')!=-1]
-        def get_initial_state(self):
-            return []
-        def load(self, fn):
-            print("LOAD '%s'" % fn)
-            saver = tf.train.Saver(var_list=self.trainable)
-            saver.restore(tf.get_default_session(), 'models/%s' % fn)
-            sys.stdout.flush()
-        def save(self, fn):
-            print("SAVE '%s'" % fn)
-            for v in self.trainable:
-                print("\tsave '%s'" % v.name)
-            saver = tf.train.Saver(var_list=self.trainable)
-            saver.save(tf.get_default_session(), 'models/%s' % fn)
-
+def policy_fn(name, env, data_init=False, supervised_part=False, oldschool=False):
     ob_space = env.observation_space
     ac_space = env.action_space
     pi = ModifiedPolicy(name=name, ob_space=ob_space, ac_space=ac_space, oldschool=oldschool, supervised_part=supervised_part, **policy_kwargs)
@@ -417,6 +421,39 @@ def policy_fn(name, env, data_init=False, supervised_part=False, oldschool=False
         print("received[%i] = first is %s mean %s std %s" % (rank, str(all_theta[0:3]), all_theta.mean(), all_theta.std()), flush=True)
 
     return pi
+
+class MultiOptionsPolicy:
+    def __init__(self, ob_space, ac_space, names=[]):
+        self.ob_space = ob_space
+        self.ac_space = ac_space
+        self.names = names
+        self.options = {}
+        self.arrays = []
+        self.dummy_pi = ModifiedPolicy(name="newpi", ob_space=ob_space, ac_space=ac_space, oldschool=False, supervised_part=False, **policy_kwargs)
+        for n in self.names:
+            print("OPTIONS POLICY '%s'" % n)
+            opt = ModifiedPolicy(name=n, ob_space=ob_space, ac_space=ac_space, oldschool=False, supervised_part=False, **policy_kwargs)
+            self.options[n] = opt
+        U.initialize()
+
+    def load(self, dummy_name):
+        for n,opt in self.options.items():
+            print("OPTIONS POLICY LOADING '%s'" % n)
+            self.dummy_pi.load(n)
+            theta = self.dummy_pi.getflat()
+            opt.setfromflat(theta)
+
+    def act(self, stochastic, ob):
+        av_pairs = []
+        for n, opt in self.options.items():
+            a, v = opt.act_unscaled(stochastic, ob)
+            av_pairs.append( (a,v,opt) )
+        av_pairs.sort(key=lambda x: -x[1])
+        print("apply %s (value %0.2f) better than %s (value %0.2f)" % (
+            av_pairs[0][2].name, av_pairs[0][1],
+            av_pairs[1][2].name, av_pairs[1][1],
+            ))
+        return av_pairs[0][0], av_pairs[0][1]
 
 
 # ------------------------- learn -----------------------------
@@ -525,9 +562,18 @@ else:
     #env.monitor.start("demo", force=True)
     ob_space = env.observation_space
     ac_space = env.action_space
-    #pi = policy_fn("pi", env, oldschool=True, supervised_part=True)
-    pi = policy_fn("newpi", env, oldschool=False, supervised_part=False)
-    #pi = policy_fn("newpi", env, oldschool=False)
+
+    if experiment.find('+')!=-1:
+        pi = MultiOptionsPolicy( ob_space, ac_space, experiment.split("+") )
+        calculate_all_arrays = None
+    else:
+        #pi = policy_fn("pi", env, oldschool=True, supervised_part=True)
+        pi = policy_fn("newpi", env, oldschool=False, supervised_part=False)
+        #pi = policy_fn("newpi", env, oldschool=False)
+        pi.arrays.reverse()
+        all_arrays = [x for name,x in pi.arrays]
+        all_arrays_names = [name for name,x in pi.arrays]
+        calculate_all_arrays = U.function([pi.stochastic, pi.ob], all_arrays)
 
     human_sets_pause = False
     from pyglet.window import key as kk
@@ -537,6 +583,7 @@ else:
         global human_sets_pause, human_wants_restart
         if pressed and key==kk.SPACE: human_sets_pause = not human_sets_pause
         if pressed and key==0xff0d: human_wants_restart = True
+        if pressed and key==kk.F1: env.draw_less = not env.draw_less
         if pressed and key==ord('q'): sys.exit(0)
         if env_id!='CommandWalker-v0': return
         command = keys.get(kk.RIGHT, 0) - keys.get(kk.LEFT, 0)
@@ -546,15 +593,9 @@ else:
         #print("(%x key=%x)" % (mod, key))
     def key_press(key, mod): key_event(True, key, mod)
     def key_release(key, mod): key_event(False, key, mod)
-    env.draw_less = False
     env.render()
     env.viewer.window.on_key_press = key_press
     env.viewer.window.on_key_release = key_release
-
-    pi.arrays.reverse()
-    all_arrays = [x for name,x in pi.arrays]
-    all_arrays_names = [name for name,x in pi.arrays]
-    calculate_all_arrays = U.function([pi.stochastic, pi.ob], all_arrays)
 
     #state = pi.get_initial_state()
     while 1:
@@ -571,14 +612,11 @@ else:
             stochastic = 0
             a, vpred, *state = pi.act(stochastic, s, *state)
             #print(a)
-            env.arrays = calculate_all_arrays(stochastic, s[None])
-            #for name,x in zip(all_arrays_names, env.arrays):
-            #    print(name, x.shape)
+            if calculate_all_arrays:
+                env.arrays = calculate_all_arrays(stochastic, s[None])
             r = 0
             sn, rplus, done, info = env.step(a)
             r += rplus
-            #if frame > env.spec.timestep_limit:
-            #    done = True
             uscore += r
             frame += 1
             env.render("human")
@@ -594,4 +632,5 @@ else:
         ts2 = time.time()
         print("score=%0.2f length=%i fps=%0.2f" % (uscore, frame, frame/(ts2-ts1)))
         env.monitor.close()
+
 

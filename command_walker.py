@@ -150,6 +150,7 @@ class CommandWalker(gym.Env):
     def __init__(self):
         self._seed()
         self.viewer = None
+        self.draw_less = False
         self.manual = False
         self.manual_height = 0
         self.experiment_name = ""
@@ -540,8 +541,8 @@ class CommandWalker(gym.Env):
                 highstep_hint = 1*SPEED_HINT*(vx_problem + vy_hint)
                 #highstep_hint = 1*SPEED_HINT*vy_hint
                 # 10 fail to converge
-                log("highstep_hint above01=%0.2f >>> vx=%0.2f vx_problem=%0.2f; vy=%0.2f vy_hint=%0.2f => %0.2f" % (
-                    above01, active_leg.tip_vx, vx_problem, active_leg.tip_vy, vy_hint, highstep_hint))
+                #log("highstep_hint above01=%0.2f >>> vx=%0.2f vx_problem=%0.2f; vy=%0.2f vy_hint=%0.2f => %0.2f" % (
+                #    above01, active_leg.tip_vx, vx_problem, active_leg.tip_vy, vy_hint, highstep_hint))
 
         reward_jump = 0
         if self.jump > 0:
@@ -628,13 +629,20 @@ class CommandWalker(gym.Env):
             prob_change_command = 0.05 if self.ts > 5 and (legs[0].ground_contact or legs[1].ground_contact) else 0.0
             prob_jump = 0.01 if legs[0].ground_contact and legs[1].ground_contact else 0.0
         if self.external_command in [-1,+1]:
-            prob_change_command = 0.01 if self.steps_done >= 2 else 0.0
+            prob_change_command = 0.01  # if self.steps_done >= 2 else 0.0
             prob_jump = 0.01 if legs[0].ground_contact or legs[1].ground_contact else 0.0
         prob_jump = 0.0
         if self.np_random.rand() < prob_change_command and not self.manual:
             while 1:
-                new_command = self.np_random.randint(low=0, high=+2)
+                comm_vect = [-1,0,+1]
+                prob_vect = [0.33,0.33,0.33]
+                if self.experiment_name.find("back") != -1:
+                    prob_vect = [0.45,0.45,0.1]
+                elif self.experiment_name.find("forw") != -1:
+                    prob_vect = [0.1,0.45,0.45]
+                new_command = self.np_random.choice(comm_vect, p=prob_vect)
                 if self.external_command==new_command: continue
+                print(prob_vect, "%i -> %i" % (self.external_command, new_command))
                 break
             self.command(new_command)
             reset_potential = True
@@ -705,7 +713,7 @@ class CommandWalker(gym.Env):
                 update_spf = True
 
         if update_spf:
-            if self.step_current_ts > 5:
+            if self.step_current_ts > 5 and False:
                 diff = self.potential_legs - self.step_base_potential
                 if not self.experiment_playback:
                     spf = 0.9995*self.step_value_per_frame[0] + 0.0005*(diff / self.step_current_ts)
@@ -833,15 +841,16 @@ class CommandWalker(gym.Env):
                     t = rendering.Transform(translation=leg.position)
                     self.viewer.draw_circle(2/SCALE, 10, color=(1,0,0)).add_attr(t)
                 self.viewer.draw_polyline( [
-                    (leg.tip_x,               leg.tip_y),
+                    (leg.tip_x,            leg.tip_y),
                     (leg.tip_x+leg.tip_vx, leg.tip_y+leg.tip_vy)
                     ], color=(1,1,1), linewidth=2)
 
-            for i in [0,1]:
-                hill_x = self.hill_x[i]
-                target_x = self.target[i]
-                hill_y = self.hill_y[i]
-                color = self.legs[i].color1
+        for i in [0,1]:
+            hill_x = self.hill_x[i]
+            target_x = self.target[i]
+            hill_y = self.hill_y[i]
+            color = self.legs[i].color1
+            if not self.draw_less:
                 self.viewer.draw_polyline( [(
                     hill_x + dx,
                     hill_y + 0.5*leg_targeting_potential(dx, 0),
@@ -850,9 +859,14 @@ class CommandWalker(gym.Env):
                     hill_x + dx,
                     hill_y + 0.5*leg_targeting_potential(dx, 1) + 1/SCALE,
                     ) for dx in np.arange(-2*MAX_TARG_STEP,+2*MAX_TARG_STEP,MAX_TARG_STEP/15)], color=color, linewidth=1)
-                t = rendering.Transform(translation=(target_x, hill_y))
-                self.viewer.draw_circle(5/SCALE, 10, color=color).add_attr(t)
+                #t = rendering.Transform(translation=(target_x, hill_y))
+            #self.viewer.draw_circle(5/SCALE, 10, color=color).add_attr(t)
+            self.viewer.draw_polyline( [
+                (target_x, self.hill_y[self.leg_active] + 25/SCALE),
+                (target_x, self.hill_y[self.leg_active] - 25/SCALE)
+                ], color=color, linewidth=1)
 
+        if not self.draw_less:
             self.viewer.scroll = self.scroll
             self.chart_legs.draw(self.viewer,   0.4, 0.6, (1,  0,  0))
             self.chart_height.draw(self.viewer, 0.7, 0.6, (0,  0.5,0))
