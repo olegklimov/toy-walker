@@ -151,6 +151,7 @@ class CommandWalker(gym.Env):
         self._seed()
         self.viewer = None
         self.draw_less = False
+        self.slowmo = False
         self.manual = False
         self.manual_height = 0
         self.experiment_name = ""
@@ -485,7 +486,8 @@ class CommandWalker(gym.Env):
             self.joints[3].motorSpeed     = float(SPEED_KNEE    * np.sign(action[3]))
             self.joints[3].maxMotorTorque = float(MOTORS_TORQUE * np.clip(np.abs(action[3]), 0, 1))
 
-        self.world.Step(2.0/FPS, 6*30, 2*30)
+        self.world.Step(2.0/FPS * (0.25 if self.slowmo else 1), 6*30, 2*30)
+        print(self.slowmo)
         self.ts += 1
 
         for leg in self.legs:

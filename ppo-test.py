@@ -584,6 +584,7 @@ else:
         if pressed and key==kk.SPACE: human_sets_pause = not human_sets_pause
         if pressed and key==0xff0d: human_wants_restart = True
         if pressed and key==kk.F1: env.draw_less = not env.draw_less
+        if pressed and key==kk.F3: env.slowmo = not env.slowmo
         if pressed and key==ord('q'): sys.exit(0)
         if env_id!='CommandWalker-v0': return
         command = keys.get(kk.RIGHT, 0) - keys.get(kk.LEFT, 0)
