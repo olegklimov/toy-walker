@@ -29,13 +29,13 @@ skip_wrap = lambda x: x
 
 env_id = sys.argv[1]
 experiment = sys.argv[2]
-max_timesteps = 16000000 if env_id=='CommandWalker-v0' else 2000000
+max_timesteps = 30000000 if env_id=='CommandWalker-v0' else 2000000
 
 if len(sys.argv)>3:
     demo = sys.argv[3]=="demo"
     manual = sys.argv[3]=="manual"
     if not demo and not manual:
-        load_previous_experiment = sys.argv[2]
+        load_previous_experiment = sys.argv[3]
 else:
     demo = False
     manual = False
@@ -212,15 +212,14 @@ def policy_fn(name, env, data_init=False, supervised_part=False, oldschool=False
                 if supervised_part:
                     x = ob
                     self.arrays.append( ("ob", ob) )
-                    x = tf.nn.relu( U.dense(x,  48, "crazy1") )
+                    x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
                     #x = tf.nn.relu( W.dense_wn(x,  48, "crazy1", wn_init=self.wn_init) )
                     skip1 = x
                     self.arrays.append( ("crazy1", x) )
                     #x = tf.nn.relu( W.dense_wn(x,  48, "crazy2", wn_init=self.wn_init) )
                     #skip2 = x
                     #self.arrays.append( ("crazy2", x) )
-                    x = tf.nn.relu( U.dense(x,  48, "crazy3") )
-                    #x = tf.nn.relu( W.dense_wn(x,  48, "crazy3", wn_init=self.wn_init) )
+                    x = tf.nn.relu( W.dense_wn(x,  48, "crazy3", wn_init=self.wn_init) )
                     skip3 = x
                     self.arrays.append( ("crazy3", x) )
                     self.crazy_final = x
@@ -240,12 +239,15 @@ def policy_fn(name, env, data_init=False, supervised_part=False, oldschool=False
                 else:
                     x = ob
                     self.arrays.append( ("ob", ob) )
-                    x = tf.nn.relu( W.dense_wn(x, 192, "silly1", wn_init=self.wn_init) )
-                    self.arrays.append( ("crazy1", x) )
-                    x = tf.nn.relu( W.dense_wn(x, 128, "silly2", wn_init=self.wn_init) )
-                    self.arrays.append( ("silly2", x) )
-                    x = tf.nn.relu( W.dense_wn(x, 128, "silly3", wn_init=self.wn_init) )
-                    self.arrays.append( ("silly3", x) )
+                    #x = tf.nn.relu( W.dense_wn(x, 192, "wnfc1", wn_init=self.wn_init) )
+                    x = tf.nn.relu( U.dense(x, 192, "fc1") )
+                    self.arrays.append( ("fc1", x) )
+                    #x = tf.nn.relu( W.dense_wn(x, 128, "wnfc2", wn_init=self.wn_init) )
+                    x = tf.nn.relu( U.dense(x, 128, "fc2") )
+                    self.arrays.append( ("fc2", x) )
+                    #x = tf.nn.relu( W.dense_wn(x, 128, "wnfc3", wn_init=self.wn_init) )
+                    x = tf.nn.relu( U.dense(x, 128, "fc3") )
+                    self.arrays.append( ("fc3", x) )
                     self.pre_value = x
                     self.pre_action = x
 
@@ -516,7 +518,7 @@ else:
 
     env = gym.make(env_id)
     if env_id=='CommandWalker-v0':
-        command_walker.verbose = 0
+        command_walker.verbose = 1
         env.experiment(experiment, playback=True)
     env.manual = manual
     env = skip_wrap(env)

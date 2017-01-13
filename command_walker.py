@@ -600,7 +600,8 @@ class CommandWalker(gym.Env):
         done = False
         if self.game_over:
             # idea is to have stuck equal crash
-            reward = REWARD_CRASH - (SPEED_HINT + self.step_value_per_frame[0]) / (1-GAMMA)
+            reward  = REWARD_CRASH
+            reward -= (SPEED_HINT + self.step_value_per_frame[0]) / (1-GAMMA)
             log("CRASH REWARD %0.2f" % reward)
             done   = True
         if pos[0] > (TERRAIN_LENGTH-TERRAIN_GRASS)*TERRAIN_STEP or pos[0] < 0:
@@ -632,7 +633,7 @@ class CommandWalker(gym.Env):
         prob_jump = 0.0
         if self.np_random.rand() < prob_change_command and not self.manual:
             while 1:
-                new_command = self.np_random.randint(low=-1, high=+1)
+                new_command = self.np_random.randint(low=0, high=+2)
                 if self.external_command==new_command: continue
                 break
             self.command(new_command)
@@ -652,6 +653,7 @@ class CommandWalker(gym.Env):
             reset_potential = True
             assert(self.external_command==0)  # starts in the air
 
+        update_spf = False
         if self.external_command==0:
             self.steps_done = 0
             self.step_current_ts = 0
@@ -669,6 +671,7 @@ class CommandWalker(gym.Env):
                 hill[a]   = targ[a]
                 targ[1-a] = targ[a] + MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 reset_potential = True
+            self.step_current_ts += 1
             if legs[a].ground_contact and legs[a].tip_x > legs[1-a].tip_x: # step made
                 self.steps_done += 1
                 log("STEP +1 SWITCH LEGS")
@@ -678,6 +681,7 @@ class CommandWalker(gym.Env):
                 targ[a]   = targ[1-a] + MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 a = 1-a
                 reset_potential = True
+                update_spf = True
 
         elif self.external_command==-1:
             assert(targ[a] > targ[1-a])
@@ -698,18 +702,20 @@ class CommandWalker(gym.Env):
                 targ[a]   = targ[1-a] - MAX_TARG_STEP*self.np_random.uniform(0.5, 1)
                 a = 1-a
                 reset_potential = True
+                update_spf = True
 
-                if self.step_current_ts > 5: ############################
-                    diff = self.potential_legs - self.step_base_potential
-                    if not self.experiment_playback:
-                        spf = 0.9995*self.step_value_per_frame[0] + 0.0005*(diff / self.step_current_ts)
-                        if spf > 0: self.step_value_per_frame[0] = spf
-                    log("%i frames, potential %0.2f -> %0.2f, diff %0.2f, per frame %0.2f, averaged %0.2f" % (
-                        self.step_current_ts, self.step_base_potential, self.potential_legs,
-                        diff, diff / self.step_current_ts,
-                        self.step_value_per_frame[0]
-                        ))
-                self.step_current_ts = 0
+        if update_spf:
+            if self.step_current_ts > 5:
+                diff = self.potential_legs - self.step_base_potential
+                if not self.experiment_playback:
+                    spf = 0.9995*self.step_value_per_frame[0] + 0.0005*(diff / self.step_current_ts)
+                    if spf > 0: self.step_value_per_frame[0] = spf
+                log("%i frames, potential %0.2f -> %0.2f, diff %0.2f, per frame %0.2f, averaged %0.2f" % (
+                    self.step_current_ts, self.step_base_potential, self.potential_legs,
+                    diff, diff / self.step_current_ts,
+                    self.step_value_per_frame[0]
+                    ))
+            self.step_current_ts = 0
 
         lidar = LidarCallback()
         for i in [0,1]:
