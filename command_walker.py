@@ -43,7 +43,7 @@ FPS    = 50
 SCALE  = 30.0   # affects how fast-paced the game is, forces should be adjusted as well
 GAMMA  = 0.99
 
-MOTORS_TORQUE = 80
+MOTORS_TORQUE = 90
 SPEED_HIP     = 8
 SPEED_KNEE    = 12
 LIDAR_RANGE   = 160/SCALE
@@ -364,7 +364,6 @@ class CommandWalker(gym.Env):
         self.potential_legs = 0.0
         self.potential_height = 0.0
         self.steps_done = 0
-        self.jump = 0
         self.hull_desired_position = self.np_random.uniform(low=-1, high=+1)
 
         self._generate_terrain(self.hardcore)
@@ -487,7 +486,6 @@ class CommandWalker(gym.Env):
             self.joints[3].maxMotorTorque = float(MOTORS_TORQUE * np.clip(np.abs(action[3]), 0, 1))
 
         self.world.Step(2.0/FPS * (0.25 if self.slowmo else 1), 6*30, 2*30)
-        print(self.slowmo)
         self.ts += 1
 
         for leg in self.legs:
@@ -507,6 +505,7 @@ class CommandWalker(gym.Env):
 
         reward_legs = potential_legs - self.potential_legs
         reward_height  = HULL_HEIGHT_POTENTIAL * ((potential_height - self.potential_height) + LEAK*potential_height)
+        reward_jump = 0
         self.potential_legs = potential_legs
         self.potential_height = potential_height
         reward_legs -= self.step_value_per_frame[0]
@@ -546,18 +545,22 @@ class CommandWalker(gym.Env):
                 #log("highstep_hint above01=%0.2f >>> vx=%0.2f vx_problem=%0.2f; vy=%0.2f vy_hint=%0.2f => %0.2f" % (
                 #    above01, active_leg.tip_vx, vx_problem, active_leg.tip_vy, vy_hint, highstep_hint))
 
-        reward_jump = 0
-        if self.jump > 0:
-            self.jump -= 1
-            reward_jump = SPEED_HINT*20*max(0, self.hull.linearVelocity.y)*SCALE/FPS
-            log("JUMP REWARD %0.2f" % reward_jump)
+        elif self.external_command in [-2,+2]:
+            if self.jump_in_mid_air==1 and not self.legs[0].ground_contact and not self.legs[1].ground_contact:
+                reward_jump = SPEED_HINT*20*max(0, self.hull.linearVelocity.y)*SCALE/FPS
+                log("JUMP REWARD %0.2f" % reward_jump)
+            else:
+                if reward_legs > 0:
+                    reward_legs = 0
+        else:
+            assert(0)
 
         reward  = reward_legs
         reward += reward_height + reward_leg_hint + reward_jump + highstep_hint
         self.chart_legs.push(reward_legs)
         self.chart_height.push(reward_height)
         self.chart_high.push(highstep_hint)
-        self.chart_misc.push(reward_leg_hint)
+        self.chart_misc.push(reward_leg_hint + reward_jump)
 
         #####################################################################################################################################
 
@@ -591,9 +594,9 @@ class CommandWalker(gym.Env):
         command = [
             (self.target[0] - self.hull.position[0]) / MAX_TARG_STEP,
             (self.target[1] - self.hull.position[0]) / MAX_TARG_STEP,
-            self.external_command,
+            np.sign(self.external_command),
             self.hull_desired_position,
-            1 if self.jump>0 else 0
+            1 if self.external_command in [-2,+2] else 0
             ]
         state = state + command + [l.fraction for l in self.lidar]
         assert len(state)==39
@@ -613,9 +616,11 @@ class CommandWalker(gym.Env):
 
     def command(self, new_command):
         if self.external_command==new_command: return
+        if self.target[0]==0 and self.target[1]==0: return # init
         if new_command in [+1,+2]: self.leg_active = (1 if self.target[1] < self.target[0] else 0)  # back leg active
         if new_command in [-1,-2]: self.leg_active = (1 if self.target[1] > self.target[0] else 0)
         if new_command in [0]: self.target[0] = self.target[1] = 0
+        if new_command in [-2,+2]: self.jump_in_mid_air = -1
         log("COMMAND %+i -> %+i, active=%i" % (self.external_command, new_command, self.leg_active))
         self.external_command = new_command
 
@@ -626,32 +631,34 @@ class CommandWalker(gym.Env):
 
         reset_potential = self.ts < 5
         prob_change_command = 0.0
-        prob_jump = 0.0
         if self.external_command in [0]:
             prob_change_command = 0.05 if self.ts > 5 and (legs[0].ground_contact or legs[1].ground_contact) else 0.0
-            prob_jump = 0.01 if legs[0].ground_contact and legs[1].ground_contact else 0.0
-        if self.external_command in [-1,+1]:
+        if self.external_command in [-2,-1,+1,+2]:
             prob_change_command = 0.01  # if self.steps_done >= 2 else 0.0
-            prob_jump = 0.01 if legs[0].ground_contact or legs[1].ground_contact else 0.0
-        prob_jump = 0.0
         if self.np_random.rand() < prob_change_command and not self.manual:
             while 1:
-                comm_vect = [-1,0,+1]
-                prob_vect = [0.33,0.33,0.33]
-                if self.experiment_name.find("back") != -1:
-                    prob_vect = [0.45,0.45,0.1]
+                comm_vect =     [ -2,  -1,   0,  +1,  +2]
+                prob_vect =     [0.2, 0.2, 0.2, 0.2, 0.2]
+                if   self.experiment_name.find("back") != -1:
+                    prob_vect = [  0, 0.5, 0.5,   0,   0]
                 elif self.experiment_name.find("forw") != -1:
-                    prob_vect = [0.1,0.45,0.45]
+                    prob_vect = [  0,   0, 0.5, 0.5,   0]
+                elif self.experiment_name.find("jump") != -1:
+                    prob_vect = [0.33,  0, 0.34, 0, 0.33]
+                else:
+                    assert(0)
+                prob_vect  = np.array(prob_vect)
+                prob_vect += 0.05
+                n = prob_vect.sum()
+                prob_vect /= n
+                print(prob_vect)
                 new_command = self.np_random.choice(comm_vect, p=prob_vect)
                 if self.external_command==new_command: continue
-                print(prob_vect, "%i -> %i" % (self.external_command, new_command))
+                log(str(prob_vect) + "%i -> %i" % (self.external_command, new_command))
                 break
             self.command(new_command)
             reset_potential = True
         a = self.leg_active
-        if (self.np_random.rand() < prob_jump and not self.manual) or self.manual_jump==1:
-            self.manual_jump = 0
-            self.jump = 15
 
         if targ[0]==0 and targ[1]==0: # initial
             diff = MAX_TARG_STEP*self.np_random.uniform(0.3, 0.5)
@@ -664,7 +671,7 @@ class CommandWalker(gym.Env):
             assert(self.external_command==0)  # starts in the air
 
         update_spf = False
-        if self.external_command==0:
+        if self.external_command==0 or (self.external_command in [-2,+2] and self.jump_in_mid_air==-1):
             self.steps_done = 0
             self.step_current_ts = 0
             self.step_base_potential = 0
@@ -727,6 +734,26 @@ class CommandWalker(gym.Env):
                     ))
             self.step_current_ts = 0
 
+        if self.external_command in [-2,+2]:
+            if self.jump_in_mid_air==0 and not legs[0].ground_contact and not legs[1].ground_contact:
+                log("IN THE AIR")
+                self.jump_in_mid_air = 1
+            if self.jump_in_mid_air in [-1,1] and legs[0].ground_contact and legs[1].ground_contact:
+                if self.jump_in_mid_air==1:
+                    log("LAND")
+                    self.jump_in_mid_air = 0
+                else:
+                    log("LAUNCH")
+                    self.jump_in_mid_air = 0
+                dir  = np.sign(self.external_command)
+                dist = MAX_TARG_STEP*self.np_random.uniform(1, 1.5)*dir
+                diff = MAX_TARG_STEP/2
+                targ[a]   = self.hull.position[0] + dist - diff
+                targ[1-a] = self.hull.position[0] + dist + diff
+                hill[a]   = targ[a]
+                hill[1-a] = targ[1-a]
+                reset_potential = True
+
         lidar = LidarCallback()
         for i in [0,1]:
             lidar.fraction = 1.0
@@ -762,7 +789,7 @@ class CommandWalker(gym.Env):
         leg1_pot = leg_targeting_potential(self.legs[1].tip_x - self.hill_x[1], self.legs[1].tip_y - self.hill_y[1])
         #print("pot[a]   = %0.2f" % leg0_pot if self.leg_active else leg1_pot)
         #print("pot[1-a] = %0.2f" % leg1_pot if self.leg_active else leg0_pot)
-        if self.external_command in [+1,-1]:
+        if self.external_command in [-2,-1,+1,+2]:
             pass
         else:
             leg0_pot *= 0.3  # stop: legs less important, stays here only as a tip

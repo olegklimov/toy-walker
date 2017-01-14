@@ -587,10 +587,12 @@ else:
         if pressed and key==kk.F3: env.slowmo = not env.slowmo
         if pressed and key==ord('q'): sys.exit(0)
         if env_id!='CommandWalker-v0': return
-        command = keys.get(kk.RIGHT, 0) - keys.get(kk.LEFT, 0)
+        command  = keys.get(kk.RIGHT, 0) - keys.get(kk.LEFT, 0)
+        command *= (1 + keys.get(kk.UP, 0))
         env.command(command)
         env.manual_jump = keys.get(kk.LSHIFT, 0)
-        env.manual_height = keys.get(kk.UP, 0) - keys.get(kk.DOWN, 0)
+        env.manual_height = 0.0
+        #env.manual_height = keys.get(kk.UP, 0) - keys.get(kk.DOWN, 0)
         #print("(%x key=%x)" % (mod, key))
     def key_press(key, mod): key_event(True, key, mod)
     def key_release(key, mod): key_event(False, key, mod)
