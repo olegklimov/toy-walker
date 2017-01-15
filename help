@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES= python3 -B ppo-test.py CommandWalker-v0 final04_forw+final06_jump_forw+final06_jump_back+final04_back2 manual
+CUDA_VISIBLE_DEVICES= python3 -B ppo-test.py CommandWalker-v0 final04_forw+final06_jump_forw2+final06_jump_back+final04_back2 manual
