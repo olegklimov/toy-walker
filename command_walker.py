@@ -546,12 +546,13 @@ class CommandWalker(gym.Env):
                 #    above01, active_leg.tip_vx, vx_problem, active_leg.tip_vy, vy_hint, highstep_hint))
 
         elif self.external_command in [-2,+2]:
-            if self.jump_in_mid_air==1 and not self.legs[0].ground_contact and not self.legs[1].ground_contact:
-                reward_jump = SPEED_HINT*20*max(0, self.hull.linearVelocity.y)*SCALE/FPS
-                log("JUMP REWARD %0.2f" % reward_jump)
-            else:
-                if reward_legs > 0:
-                    reward_legs = 0
+            reward_jump  = SPEED_HINT*1*self.hull.linearVelocity.x*np.sign(self.external_command)*SCALE/FPS
+            reward_jump += SPEED_HINT*1*abs(self.hull.linearVelocity.y)*SCALE/FPS
+            reward_jump += SPEED_HINT*20*max(0, self.hull.linearVelocity.y)*SCALE/FPS
+            # log("JUMP REWARD %0.2f" % reward_jump)
+            #else:
+            #    if reward_legs > 0:
+            #        reward_legs = 0
         else:
             assert(0)
 
@@ -639,12 +640,14 @@ class CommandWalker(gym.Env):
             while 1:
                 comm_vect =     [ -2,  -1,   0,  +1,  +2]
                 prob_vect =     [0.2, 0.2, 0.2, 0.2, 0.2]
-                if   self.experiment_name.find("back") != -1:
+                if   self.experiment_name.find("jump") != -1 and self.experiment_name.find("back") != -1: # jump back
+                    prob_vect = [0.5,   0, 0.5,   0,   0]
+                elif self.experiment_name.find("jump") != -1 and self.experiment_name.find("forw") != -1: # jump forw
+                    prob_vect = [  0,   0, 0.5,   0, 0.5]
+                elif self.experiment_name.find("back") != -1:
                     prob_vect = [  0, 0.5, 0.5,   0,   0]
                 elif self.experiment_name.find("forw") != -1:
                     prob_vect = [  0,   0, 0.5, 0.5,   0]
-                elif self.experiment_name.find("jump") != -1:
-                    prob_vect = [0.33,  0, 0.34, 0, 0.33]
                 else:
                     assert(0)
                 prob_vect  = np.array(prob_vect)
@@ -748,6 +751,7 @@ class CommandWalker(gym.Env):
                 dir  = np.sign(self.external_command)
                 dist = MAX_TARG_STEP*self.np_random.uniform(1, 1.5)*dir
                 diff = MAX_TARG_STEP/2
+                a = 1-a
                 targ[a]   = self.hull.position[0] + dist - diff
                 targ[1-a] = self.hull.position[0] + dist + diff
                 hill[a]   = targ[a]
